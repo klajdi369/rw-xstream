@@ -217,7 +217,7 @@ export default function App() {
         clearBlackGuard();
 
         const startedAt = Date.now();
-        const maxWaitMs = attempt.viaTranscode ? 20000 : (attempt.viaProxy ? 15000 : 9000);
+        const maxWaitMs = attempt.viaTranscode ? 30000 : (attempt.viaProxy ? 18000 : 10000);
 
         const probe = () => {
           if (settled) return;
@@ -225,7 +225,10 @@ export default function App() {
           const q = v.getVideoPlaybackQuality?.();
           const frames = q ? q.totalVideoFrames : ((v as any).webkitDecodedFrameCount || 0);
 
-          if (frames > 0) {
+          const progressed = v.currentTime > 1 || (!v.paused && v.readyState >= 3);
+          const hasAudioBytes = ((v as any).webkitAudioDecodedByteCount || 0) > 0;
+
+          if (frames > 0 || progressed || hasAudioBytes) {
             settled = true;
             clearBlackGuard();
             return;
@@ -239,7 +242,7 @@ export default function App() {
           blackGuard = window.setTimeout(probe, 1800);
         };
 
-        blackGuard = window.setTimeout(probe, 5000);
+        blackGuard = window.setTimeout(probe, 6500);
       };
 
       if (attempt.playAs === 'm3u8' && Hls.isSupported()) {
@@ -260,7 +263,15 @@ export default function App() {
       }
 
       if (attempt.playAs === 'ts' && mpegts.getFeatureList().mseLivePlayback) {
-        const p = mpegts.createPlayer({ type: 'mpegts', isLive: true, url }, { enableWorker: false });
+        const p = mpegts.createPlayer(
+          { type: 'mpegts', isLive: true, url },
+          {
+            enableWorker: false,
+            enableStashBuffer: true,
+            lazyLoad: false,
+            autoCleanupSourceBuffer: true,
+          },
+        );
         mtsRef.current = p;
         p.on(mpegts.Events.ERROR, () => fallback());
         p.attachMediaElement(v);
