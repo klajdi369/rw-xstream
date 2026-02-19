@@ -193,6 +193,10 @@ export default function App() {
       }
 
       stopPlayback();
+      // Brief pause to let old connections drain — prevents 403 from
+      // IPTV servers that reject concurrent connections per account
+      await new Promise((r) => setTimeout(r, index === 0 ? 150 : 300));
+      if (playToken !== playTokenRef.current) return;
 
       const directUrl = `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${attempt.sourceFormat}`;
       const proxyRelative = `/proxy?url=${encodeURIComponent(directUrl)}&deint=1`;
@@ -237,7 +241,8 @@ export default function App() {
         clearBlackGuard();
 
         const startedAt = Date.now();
-        const maxWaitMs = attempt.viaTranscode ? 30000 : (attempt.viaProxy ? 18000 : 10000);
+        // Faster timeouts: direct 4s, proxy 7s, transcode 20s
+        const maxWaitMs = attempt.viaTranscode ? 20000 : (attempt.viaProxy ? 7000 : 4000);
 
         const probe = () => {
           if (settled || playToken !== playTokenRef.current) return;
@@ -259,10 +264,11 @@ export default function App() {
             return;
           }
 
-          blackGuard = window.setTimeout(probe, 1800);
+          blackGuard = window.setTimeout(probe, 800);
         };
 
-        blackGuard = window.setTimeout(probe, 6500);
+        // First probe after 2.5s (was 6.5s)
+        blackGuard = window.setTimeout(probe, 2500);
       };
 
       if (attempt.playAs === 'm3u8' && Hls.isSupported()) {
