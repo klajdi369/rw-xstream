@@ -146,19 +146,21 @@ export default function App() {
     const preferredFmt = forceFmt ?? (fmt === 'ts' ? 'ts' : 'm3u8');
     const attemptOrder = preferredFmt === 'm3u8'
       ? [
-        { format: 'm3u8' as const, viaProxy: false },
-        { format: 'm3u8' as const, viaProxy: true },
-        { format: 'ts' as const, viaProxy: false },
-        { format: 'ts' as const, viaProxy: true },
+        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: false },
+        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: true, viaTranscode: false },
+        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: false },
+        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: true, viaTranscode: false },
+        { sourceFormat: 'm3u8' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: true },
       ]
       : [
-        { format: 'ts' as const, viaProxy: false },
-        { format: 'ts' as const, viaProxy: true },
-        { format: 'm3u8' as const, viaProxy: false },
-        { format: 'm3u8' as const, viaProxy: true },
+        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: false },
+        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: true, viaTranscode: false },
+        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: false },
+        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: true, viaTranscode: false },
+        { sourceFormat: 'm3u8' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: true },
       ];
 
-    const attempts = useProxy ? attemptOrder : attemptOrder.filter((a) => !a.viaProxy);
+    const attempts = useProxy ? attemptOrder : attemptOrder.filter((a) => !a.viaProxy && !a.viaTranscode);
 
     setPlayingId(String(ch.stream_id));
     setHudTitle(ch.name || 'Playing');
@@ -173,12 +175,16 @@ export default function App() {
 
       stopPlayback();
 
-      const directUrl = `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${attempt.format}`;
+      const directUrl = `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${attempt.sourceFormat}`;
       const proxyRelative = `/proxy?url=${encodeURIComponent(directUrl)}&deint=1`;
       const proxyAbsolute = `${window.location.origin}${proxyRelative}`;
-      const url = attempt.viaProxy ? proxyAbsolute : directUrl;
+      const transcodeRelative = `/proxy-transcode?url=${encodeURIComponent(directUrl)}`;
+      const transcodeAbsolute = `${window.location.origin}${transcodeRelative}`;
+      const url = attempt.viaTranscode
+        ? transcodeAbsolute
+        : (attempt.viaProxy ? proxyAbsolute : directUrl);
 
-      const modeLabel = `${attempt.format.toUpperCase()}${attempt.viaProxy ? ' + Proxy' : ''}`;
+      const modeLabel = `${attempt.playAs.toUpperCase()}${attempt.viaProxy ? ' + Proxy' : ''}${attempt.viaTranscode ? ' + FFMPEG' : ''}`;
       setHudSub(`Connecting… ${modeLabel}`);
       wakeHud();
 
@@ -211,7 +217,7 @@ export default function App() {
         clearBlackGuard();
 
         const startedAt = Date.now();
-        const maxWaitMs = attempt.viaProxy ? 15000 : 9000;
+        const maxWaitMs = attempt.viaTranscode ? 20000 : (attempt.viaProxy ? 15000 : 9000);
 
         const probe = () => {
           if (settled) return;
@@ -236,7 +242,7 @@ export default function App() {
         blackGuard = window.setTimeout(probe, 5000);
       };
 
-      if (attempt.format === 'm3u8' && Hls.isSupported()) {
+      if (attempt.playAs === 'm3u8' && Hls.isSupported()) {
         const hls = new Hls({ lowLatencyMode: true, maxBufferLength: 10, maxMaxBufferLength: 30 });
         hlsRef.current = hls;
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -253,7 +259,7 @@ export default function App() {
         return;
       }
 
-      if (attempt.format === 'ts' && mpegts.getFeatureList().mseLivePlayback) {
+      if (attempt.playAs === 'ts' && mpegts.getFeatureList().mseLivePlayback) {
         const p = mpegts.createPlayer({ type: 'mpegts', isLive: true, url }, { enableWorker: false });
         mtsRef.current = p;
         p.on(mpegts.Events.ERROR, () => fallback());

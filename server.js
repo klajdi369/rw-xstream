@@ -172,6 +172,77 @@ async function handleProxy(req, res, url) {
   }
 }
 
+
+function transcodeFromUrl(targetUrl, res) {
+  const ffmpeg = spawn('ffmpeg', [
+    '-hide_banner',
+    '-loglevel', 'error',
+    '-fflags', 'nobuffer',
+    '-flags', 'low_delay',
+    '-reconnect', '1',
+    '-reconnect_streamed', '1',
+    '-reconnect_delay_max', '2',
+    '-i', targetUrl,
+    '-vf', 'yadif=0:-1:0',
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-tune', 'zerolatency',
+    '-pix_fmt', 'yuv420p',
+    '-g', '50',
+    '-keyint_min', '25',
+    '-sc_threshold', '0',
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    '-ar', '48000',
+    '-ac', '2',
+    '-f', 'mpegts',
+    'pipe:1',
+  ]);
+
+  res.writeHead(200, {
+    'Content-Type': 'video/mp2t',
+    'Cache-Control': 'no-store, no-cache, must-revalidate',
+    'Access-Control-Allow-Origin': '*',
+  });
+
+  ffmpeg.stdout.pipe(res);
+
+  const cleanup = () => {
+    ffmpeg.kill('SIGKILL');
+  };
+
+  ffmpeg.on('error', () => {
+    if (!res.headersSent) send(res, 500, 'text/plain; charset=utf-8', 'ffmpeg unavailable');
+    cleanup();
+  });
+
+  ffmpeg.on('close', (code) => {
+    if (code !== 0 && !res.writableEnded) {
+      res.end();
+    }
+  });
+
+  res.on('close', cleanup);
+}
+
+async function handleProxyTranscode(res, url) {
+  const target = url.searchParams.get('url');
+  if (!target) return send(res, 400, 'text/plain; charset=utf-8', 'Missing url');
+
+  let targetUrl;
+  try {
+    targetUrl = new URL(target);
+  } catch {
+    return send(res, 400, 'text/plain; charset=utf-8', 'Invalid url');
+  }
+
+  if (!['http:', 'https:'].includes(targetUrl.protocol)) {
+    return send(res, 400, 'text/plain; charset=utf-8', 'Unsupported protocol');
+  }
+
+  transcodeFromUrl(targetUrl.toString(), res);
+}
+
 function serveStatic(reqPath, res) {
   const rel = reqPath === '/' ? '/index.html' : reqPath;
   const filePath = path.join(DIST_DIR, path.normalize(rel));
@@ -208,6 +279,11 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === '/proxy') {
     await handleProxy(req, res, url);
+    return;
+  }
+
+  if (url.pathname === '/proxy-transcode') {
+    await handleProxyTranscode(res, url);
     return;
   }
 
