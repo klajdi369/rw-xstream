@@ -37,7 +37,7 @@ function send(res, status, type, body) {
 
 function passthroughHeaders(headers) {
   const out = {};
-  const allowed = ['accept', 'user-agent', 'cache-control', 'pragma', 'range', 'referer', 'origin'];
+  const allowed = ['accept', 'user-agent', 'cache-control', 'pragma', 'range'];
   for (const key of allowed) {
     if (headers[key]) out[key] = headers[key];
   }
@@ -135,6 +135,9 @@ async function handleProxy(req, res, url) {
   try {
     const hdrs = passthroughHeaders(req.headers);
     if (cookieFromQuery) hdrs.cookie = cookieFromQuery;
+    if (!hdrs['user-agent']) hdrs['user-agent'] = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36';
+    delete hdrs.origin;
+    delete hdrs.referer;
 
     const upstream = await fetch(targetUrl, {
       method: 'GET',
@@ -143,7 +146,9 @@ async function handleProxy(req, res, url) {
     });
 
     if (!upstream.ok) {
-      console.warn(`[PROXY] upstream ${upstream.status} ${targetUrl}`);
+      let preview = '';
+      try { preview = (await upstream.text()).slice(0, 180); } catch { /* noop */ }
+      console.warn(`[PROXY] upstream ${upstream.status} ${targetUrl} final=${upstream.url} preview=${preview.split('\n').join(' ')}`);
       return send(res, upstream.status, 'text/plain; charset=utf-8', `Upstream HTTP ${upstream.status}`);
     }
 
