@@ -292,6 +292,14 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+
+  React.useEffect(() => {
+    clearTimeout(hudTimerRef.current);
+    if (!sidebarOpen && !settingsOpen && !hudHidden) {
+      hudTimerRef.current = setTimeout(() => setHudHidden(true), 1800);
+    }
+  }, [hudHidden, settingsOpen, sidebarOpen]);
+
   React.useEffect(() => {
     const q = catQuery.trim().toLowerCase();
     const filtered = q ? allCategories.filter((c) => String(c.category_name || '').toLowerCase().includes(q)) : allCategories;

@@ -27,6 +27,26 @@ export function VirtualList<T>({
     if (ref.current) setHeight(ref.current.clientHeight);
   }, []);
 
+  React.useEffect(() => {
+    const el = ref.current;
+    if (!el || items.length === 0) return;
+
+    const i = Math.max(0, Math.min(selectedIndex, items.length - 1));
+    const top = i * itemHeight;
+    const bottom = top + itemHeight;
+    const st = el.scrollTop;
+    const vh = el.clientHeight;
+
+    if (top < st) {
+      el.scrollTop = top;
+      setScrollTop(top);
+    } else if (bottom > st + vh) {
+      const nextTop = bottom - vh;
+      el.scrollTop = nextTop;
+      setScrollTop(nextTop);
+    }
+  }, [itemHeight, items.length, selectedIndex]);
+
   const first = Math.max(0, Math.floor(scrollTop / itemHeight) - overscan);
   const last = Math.min(items.length - 1, Math.ceil((scrollTop + height) / itemHeight) + overscan);
 
