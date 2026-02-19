@@ -1,0 +1,20 @@
+:root {
+  --bg:#090b0e;--panel:rgba(10,14,20,.97);--line:#1e2738;--text:#e8f0fa;--muted:#7a90aa;--acc:#1dd1a1;--foc:#3aa0ff;
+  --font:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;
+}
+*,*::before,*::after{box-sizing:border-box}
+html,body,#root{height:100%;margin:0;overflow:hidden;background:#000;font-family:var(--font);color:var(--text)}
+#videoLayer{position:fixed;inset:0;z-index:1;background:#000}#video{width:100%;height:100%;object-fit:contain}
+#backdrop{position:fixed;inset:0;z-index:9;background:rgba(0,0,0,.55);opacity:0;pointer-events:none}#backdrop.open{opacity:1;pointer-events:auto}
+#sidebar{position:fixed;left:0;top:0;bottom:0;width:720px;z-index:10;display:flex;transform:translateX(-100%);transition:transform .2s}#sidebar.open{transform:translateX(0)}
+.panel{display:flex;flex-direction:column;height:100%;background:var(--panel);border-right:1px solid var(--line)}#catPanel{width:270px}.panelHead{padding:18px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
+.badge{font-size:12px;color:var(--muted)}
+.vScroll{flex:1;position:relative;overflow:auto}.vSpacer{position:absolute;top:0;left:0;width:1px}.vWindow{position:absolute;inset:0}
+.item{position:absolute;left:8px;right:8px;height:70px;padding:0 16px;border-radius:12px;border:2px solid transparent;display:flex;align-items:center;gap:14px;background:rgba(255,255,255,.025)}
+.item.sel{border-color:var(--foc);background:rgba(58,160,255,.12)}.dot{width:10px;height:10px;border-radius:50%;background:#2c3b4e}.meta{min-width:0}.iname{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.isub{font-size:12px;color:var(--muted)}
+#hud{position:fixed;bottom:48px;left:48px;right:48px;z-index:5;display:flex;justify-content:space-between}.hide{opacity:0}
+.hudInfo,.hudHint{background:rgba(0,0,0,.7);border:1px solid rgba(255,255,255,.13);border-radius:16px;padding:14px 18px}
+#settingsOverlay{position:fixed;inset:0;display:none;z-index:100;background:rgba(0,0,0,.75);align-items:center;justify-content:center}#settingsOverlay.show{display:flex}
+#settingsCard{width:min(820px,94vw);border-radius:20px;border:1px solid rgba(255,255,255,.13);background:rgba(25,25,25,.95);padding:24px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}.field{display:flex;flex-direction:column;gap:6px}.field input{padding:10px;border-radius:8px;border:1px solid #333;background:#111;color:#fff}
+.toggleRow,.settActions{display:flex;justify-content:space-between;align-items:center;margin-top:14px}.btn{padding:10px 16px;border-radius:8px;border:1px solid #555;background:#222;color:#fff}

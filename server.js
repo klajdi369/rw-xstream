@@ -1,12 +1,14 @@
-'use strict';
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const PORT = 3004;
 const HOST = '0.0.0.0';
-const PUBLIC_DIR = path.join(__dirname, 'public');
+const DIST_DIR = path.join(__dirname, 'dist');
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -19,41 +21,35 @@ const MIME_TYPES = {
   '.gif': 'image/gif',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
-  '.txt': 'text/plain; charset=utf-8',
 };
 
-function send(res, status, contentType, body) {
-  res.writeHead(status, { 'Content-Type': contentType });
+function send(res, status, type, body) {
+  res.writeHead(status, { 'Content-Type': type });
   res.end(body);
 }
 
-function serveFile(reqPath, res) {
-  const safePath = path.normalize(reqPath).replace(/^([.][.][/\\])+/, '');
-  let filePath = path.join(PUBLIC_DIR, safePath);
+function serveStatic(reqPath, res) {
+  const rel = reqPath === '/' ? '/index.html' : reqPath;
+  const filePath = path.join(DIST_DIR, path.normalize(rel));
 
-  if (filePath.endsWith(path.sep)) {
-    filePath = path.join(filePath, 'index.html');
+  if (!filePath.startsWith(DIST_DIR)) {
+    send(res, 403, 'text/plain; charset=utf-8', 'Forbidden');
+    return;
   }
 
-  fs.stat(filePath, (statErr, stats) => {
-    if (statErr) {
-      send(res, 404, 'text/plain; charset=utf-8', 'Not Found');
+  fs.readFile(filePath, (err, data) => {
+    if (!err) {
+      const ext = path.extname(filePath).toLowerCase();
+      send(res, 200, MIME_TYPES[ext] || 'application/octet-stream', data);
       return;
     }
 
-    if (stats.isDirectory()) {
-      filePath = path.join(filePath, 'index.html');
-    }
-
-    fs.readFile(filePath, (readErr, data) => {
-      if (readErr) {
-        send(res, 500, 'text/plain; charset=utf-8', 'Internal Server Error');
+    fs.readFile(path.join(DIST_DIR, 'index.html'), (indexErr, indexData) => {
+      if (indexErr) {
+        send(res, 500, 'text/plain; charset=utf-8', 'Build not found. Run: npm run build');
         return;
       }
-
-      const ext = path.extname(filePath).toLowerCase();
-      const type = MIME_TYPES[ext] || 'application/octet-stream';
-      send(res, 200, type, data);
+      send(res, 200, 'text/html; charset=utf-8', indexData);
     });
   });
 }
@@ -64,10 +60,8 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  const reqPath = url.pathname === '/' ? '/index.html' : url.pathname;
-
-  serveFile(reqPath, res);
+  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+  serveStatic(url.pathname, res);
 });
 
 server.listen(PORT, HOST, () => {
