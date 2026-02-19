@@ -182,7 +182,21 @@ export default function App() {
       setHudSub(`Connecting… ${modeLabel}`);
       wakeHud();
 
+      let settled = false;
+      let blackGuard: number | null = null;
+
+      const clearBlackGuard = () => {
+        if (blackGuard !== null) {
+          window.clearTimeout(blackGuard);
+          blackGuard = null;
+        }
+      };
+
       const fallback = () => {
+        if (settled) return;
+        settled = true;
+        clearBlackGuard();
+
         if (attempts[index + 1]) {
           setHudSub(`⚠ ${modeLabel} failed — retrying…`);
           wakeHud();
@@ -193,13 +207,25 @@ export default function App() {
         }
       };
 
+      const armBlackGuard = () => {
+        clearBlackGuard();
+        blackGuard = window.setTimeout(() => {
+          if (settled) return;
+
+          const q = v.getVideoPlaybackQuality?.();
+          const frames = q ? q.totalVideoFrames : ((v as any).webkitDecodedFrameCount || 0);
+          if (frames <= 0) fallback();
+        }, 4500);
+      };
+
       if (attempt.format === 'm3u8' && Hls.isSupported()) {
         const hls = new Hls({ lowLatencyMode: true, maxBufferLength: 10, maxMaxBufferLength: 30 });
         hlsRef.current = hls;
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           setHudSub(`▶ Live (${modeLabel})`);
-          v.play().catch(() => undefined);
+          v.play().catch(() => fallback());
           fetchEpg(ch.stream_id);
+          armBlackGuard();
         });
         hls.on(Hls.Events.ERROR, (_: any, d: any) => {
           if (d?.fatal) fallback();
@@ -218,6 +244,7 @@ export default function App() {
         v.play().catch(() => fallback());
         setHudSub(`▶ TS Live (${modeLabel})`);
         fetchEpg(ch.stream_id);
+        armBlackGuard();
         return;
       }
 
@@ -225,6 +252,7 @@ export default function App() {
       v.oncanplay = () => {
         setHudSub(`▶ Live (${modeLabel})`);
         fetchEpg(ch.stream_id);
+        armBlackGuard();
       };
       v.onerror = () => fallback();
       v.play().catch(() => fallback());
