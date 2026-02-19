@@ -61,6 +61,9 @@ export default function App() {
   const activeCatRef = React.useRef<string>('');
   const hudTimerRef = React.useRef<any>(null);
   const playTokenRef = React.useRef(0);
+  const backendBaseRef = React.useRef(import.meta.env.DEV
+    ? `${window.location.protocol}//${window.location.hostname}:3005`
+    : window.location.origin);
 
   const apiUrl = React.useCallback((params: Record<string, any>) => {
     const u = new URL(`${normServer(server)}/player_api.php`);
@@ -174,9 +177,9 @@ export default function App() {
 
       const directUrl = `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${attempt.sourceFormat}`;
       const proxyRelative = `/proxy?url=${encodeURIComponent(directUrl)}&deint=1`;
-      const proxyAbsolute = `${window.location.origin}${proxyRelative}`;
+      const proxyAbsolute = `${backendBaseRef.current}${proxyRelative}`;
       const transcodeRelative = `/proxy-transcode?url=${encodeURIComponent(directUrl)}`;
-      const transcodeAbsolute = `${window.location.origin}${transcodeRelative}`;
+      const transcodeAbsolute = `${backendBaseRef.current}${transcodeRelative}`;
       const url = attempt.viaTranscode ? transcodeAbsolute : (attempt.viaProxy ? proxyAbsolute : directUrl);
 
       const modeLabel = `${attempt.playAs.toUpperCase()}${attempt.viaProxy ? ' + Proxy' : ''}${attempt.viaTranscode ? ' + FFMPEG' : ''}`;

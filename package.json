@@ -5,7 +5,7 @@
   "description": "React + TypeScript IPTV player",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0 --port 3004",
+    "dev": "bash -lc 'API_ONLY=1 PORT=3005 node server.js & trap \"kill 0\" EXIT; vite --host 0.0.0.0 --port 3004'",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0 --port 3004",
     "start": "node server.js"

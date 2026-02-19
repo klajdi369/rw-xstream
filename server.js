@@ -8,8 +8,9 @@ import { spawn } from 'node:child_process';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = 3004;
+const PORT = Number(process.env.PORT || 3004);
 const HOST = '0.0.0.0';
+const API_ONLY = process.env.API_ONLY === '1';
 const DIST_DIR = path.join(__dirname, 'dist');
 const REMUX_DIR = path.join(__dirname, '.remux');
 const remuxJobs = new Map();
@@ -441,6 +442,11 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === '/remux/debug') {
     handleRemuxDebug(res);
+    return;
+  }
+
+  if (API_ONLY) {
+    send(res, 404, 'text/plain; charset=utf-8', 'Not Found');
     return;
   }
 
