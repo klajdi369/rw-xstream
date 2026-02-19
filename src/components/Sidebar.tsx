@@ -8,17 +8,27 @@ type Props = {
   channels: Channel[];
   selectedCategory: number;
   selectedChannel: number;
+  categoryQuery: string;
+  channelQuery: string;
+  playingId: string | null;
+  onCategoryQuery: (value: string) => void;
+  onChannelQuery: (value: string) => void;
   onPickCategory: (index: number) => void;
   onPickChannel: (index: number) => void;
 };
 
 export function Sidebar(props: Props) {
-  const { open, categories, channels, selectedCategory, selectedChannel, onPickCategory, onPickChannel } = props;
+  const {
+    open, categories, channels, selectedCategory, selectedChannel,
+    categoryQuery, channelQuery, playingId,
+    onCategoryQuery, onChannelQuery, onPickCategory, onPickChannel,
+  } = props;
 
   return (
     <div id="sidebar" className={open ? 'open' : ''}>
       <div className="panel" id="catPanel">
         <div className="panelHead"><span className="ttl">Categories</span><span className="badge">{categories.length}</span></div>
+        <div className="searchWrap"><input className="sInput" placeholder="Search…" value={categoryQuery} onChange={(e) => onCategoryQuery(e.target.value)} /></div>
         <VirtualList
           items={categories}
           selectedIndex={selectedCategory}
@@ -33,6 +43,7 @@ export function Sidebar(props: Props) {
       </div>
       <div className="panel" id="chPanel">
         <div className="panelHead"><span className="ttl">Channels</span><span className="badge">{channels.length}</span></div>
+        <div className="searchWrap"><input className="sInput" placeholder="Search…" value={channelQuery} onChange={(e) => onChannelQuery(e.target.value)} /></div>
         <VirtualList
           items={channels}
           selectedIndex={selectedChannel}
@@ -43,6 +54,7 @@ export function Sidebar(props: Props) {
               <div className="meta"><div className="iname">{ch.name || 'Channel'}</div><div className="isub">ID {String(ch.stream_id)}</div></div>
             </>
           )}
+          classForIndex={(item) => (String(item.stream_id) === playingId ? 'playing' : '')}
         />
       </div>
     </div>

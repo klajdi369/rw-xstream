@@ -7,6 +7,7 @@ type VirtualListProps<T> = {
   overscan?: number;
   onPick: (index: number) => void;
   render: (item: T, index: number, selected: boolean) => React.ReactNode;
+  classForIndex?: (item: T, index: number) => string;
 };
 
 export function VirtualList<T>({
@@ -16,6 +17,7 @@ export function VirtualList<T>({
   overscan = 5,
   onPick,
   render,
+  classForIndex,
 }: VirtualListProps<T>) {
   const ref = React.useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = React.useState(0);
@@ -29,19 +31,16 @@ export function VirtualList<T>({
   const last = Math.min(items.length - 1, Math.ceil((scrollTop + height) / itemHeight) + overscan);
 
   return (
-    <div
-      className="vScroll"
-      ref={ref}
-      onScroll={(e) => setScrollTop((e.target as HTMLDivElement).scrollTop)}
-    >
+    <div className="vScroll" ref={ref} onScroll={(e) => setScrollTop((e.target as HTMLDivElement).scrollTop)}>
       <div className="vSpacer" style={{ height: `${items.length * itemHeight}px` }} />
       <div className="vWindow">
         {items.slice(first, last + 1).map((item, idx) => {
           const i = first + idx;
+          const extra = classForIndex?.(item, i) ?? '';
           return (
             <div
               key={i}
-              className={`item ${i === selectedIndex ? 'sel' : ''}`}
+              className={`item ${i === selectedIndex ? 'sel' : ''} ${extra}`.trim()}
               style={{ top: `${i * itemHeight + 3}px` }}
               onClick={() => onPick(i)}
             >
