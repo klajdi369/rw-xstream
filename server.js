@@ -37,14 +37,14 @@ function send(res, status, type, body) {
 
 function passthroughHeaders(headers) {
   const out = {};
-  const allowed = ['accept', 'user-agent', 'cache-control', 'pragma', 'range'];
+  const allowed = ['accept', 'user-agent', 'cache-control', 'pragma', 'range', 'referer', 'origin'];
   for (const key of allowed) {
     if (headers[key]) out[key] = headers[key];
   }
   return out;
 }
 
-function rewritePlaylist(body, sourceUrl, host) {
+function rewritePlaylist(body, sourceUrl, host, cookie = '') {
   const base = new URL(sourceUrl);
   return body
     .split('\n')
@@ -54,7 +54,8 @@ function rewritePlaylist(body, sourceUrl, host) {
 
       try {
         const absolute = new URL(trimmed, base).toString();
-        return `/proxy?url=${encodeURIComponent(absolute)}&deint=1&host=${encodeURIComponent(host)}`;
+        const cookieQ = cookie ? `&cookie=${encodeURIComponent(cookie)}` : '';
+        return `/proxy?url=${encodeURIComponent(absolute)}&deint=1&host=${encodeURIComponent(host)}${cookieQ}`;
       } catch {
         return line;
       }
@@ -116,6 +117,7 @@ async function handleProxy(req, res, url) {
   const target = url.searchParams.get('url');
   const deint = url.searchParams.get('deint') !== '0';
   const host = url.searchParams.get('host') || `${req.headers.host ?? `127.0.0.1:${PORT}`}`;
+  const cookieFromQuery = url.searchParams.get('cookie') || '';
 
   if (!target) return send(res, 400, 'text/plain; charset=utf-8', 'Missing url');
 
@@ -131,23 +133,31 @@ async function handleProxy(req, res, url) {
   }
 
   try {
+    const hdrs = passthroughHeaders(req.headers);
+    if (cookieFromQuery) hdrs.cookie = cookieFromQuery;
+
     const upstream = await fetch(targetUrl, {
       method: 'GET',
-      headers: passthroughHeaders(req.headers),
+      headers: hdrs,
       redirect: 'follow',
     });
 
     if (!upstream.ok) {
+      console.warn(`[PROXY] upstream ${upstream.status} ${targetUrl}`);
       return send(res, upstream.status, 'text/plain; charset=utf-8', `Upstream HTTP ${upstream.status}`);
     }
 
     const ctype = upstream.headers.get('content-type') || '';
+    const getSetCookie = upstream.headers.getSetCookie ? upstream.headers.getSetCookie() : [];
+    const cookieParts = (Array.isArray(getSetCookie) ? getSetCookie : []).map((line) => String(line).split(';')[0]).filter(Boolean);
+    const stickyCookie = cookieParts.join('; ');
     const isPlaylist = ctype.includes('mpegurl') || targetUrl.pathname.endsWith('.m3u8');
     const isTs = ctype.includes('video/mp2t') || targetUrl.pathname.endsWith('.ts');
 
     if (isPlaylist) {
       const text = await upstream.text();
-      const rewritten = rewritePlaylist(text, targetUrl.toString(), host);
+      const rewritten = rewritePlaylist(text, targetUrl.toString(), host, stickyCookie);
+      console.log(`[PROXY] playlist ok ${targetUrl} cookie=${stickyCookie ? 'yes' : 'no'}`);
       res.writeHead(200, {
         'Content-Type': 'application/x-mpegURL',
         'Cache-Control': 'no-store, no-cache, must-revalidate',
