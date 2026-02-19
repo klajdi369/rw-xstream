@@ -33,6 +33,7 @@ export function Sidebar(props: Props) {
         <VirtualList
           items={categories}
           selectedIndex={selectedCategory}
+          active={open && focus === 'categories'}
           onPick={onPickCategory}
           render={(cat) => (
             <>
@@ -48,6 +49,7 @@ export function Sidebar(props: Props) {
         <VirtualList
           items={channels}
           selectedIndex={selectedChannel}
+          active={open && focus === 'channels'}
           onPick={onPickChannel}
           render={(ch) => (
             <>

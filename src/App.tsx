@@ -44,6 +44,7 @@ export default function App() {
   const [pass, setPass] = React.useState('VFCED1');
   const [fmt, setFmt] = React.useState('m3u8');
   const [remember, setRemember] = React.useState(true);
+  const [useProxy, setUseProxy] = React.useState(true);
   const [msg, setMsg] = React.useState('');
 
   const [allCategories, setAllCategories] = React.useState<Category[]>([]);
@@ -144,7 +145,10 @@ export default function App() {
 
     stopPlayback();
     const effective = forceFmt ?? (fmt === 'ts' ? 'ts' : 'm3u8');
-    const url = `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${effective}`;
+    const directUrl = `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${effective}`;
+    const url = useProxy
+      ? `/proxy?url=${encodeURIComponent(directUrl)}&deint=1`
+      : directUrl;
 
     setPlayingId(String(ch.stream_id));
     setHudTitle(ch.name || 'Playing');
@@ -194,7 +198,7 @@ export default function App() {
       const last: LastChannel = { streamId: String(ch.stream_id), name: ch.name, catId: activeCatRef.current };
       localStorage.setItem(LAST_KEY, JSON.stringify(last));
     }
-  }, [fetchEpg, fmt, pass, remember, server, stopPlayback, user, wakeHud]);
+  }, [fetchEpg, fmt, pass, remember, server, stopPlayback, useProxy, user, wakeHud]);
 
   const loadCategory = React.useCallback(async (cat: Category, resetSel = true) => {
     const id = String(cat.category_id);
@@ -239,7 +243,7 @@ export default function App() {
       setChQuery('');
       cacheRef.current.clear();
 
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ server, user, pass, fmt, rememberChannel: remember }));
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ server, user, pass, fmt, rememberChannel: remember, useProxy }));
 
       if (filtered[0]) await loadCategory(filtered[0], true);
 
@@ -272,7 +276,7 @@ export default function App() {
     } finally {
       setConnecting(false);
     }
-  }, [apiUrl, fmt, jget, loadCategory, pass, playChannel, remember, server, user, wakeHud]);
+  }, [apiUrl, fmt, jget, loadCategory, pass, playChannel, remember, server, useProxy, user, wakeHud]);
 
   React.useEffect(() => {
     const saved: any = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}');
@@ -281,6 +285,7 @@ export default function App() {
     if (saved.pass) setPass(saved.pass);
     if (saved.fmt) setFmt(saved.fmt);
     if (saved.rememberChannel !== undefined) setRemember(saved.rememberChannel !== false);
+    if (saved.useProxy !== undefined) setUseProxy(saved.useProxy !== false);
 
     if (saved.server && saved.user && saved.pass) setTimeout(() => connect(), 30);
     else setSettingsOpen(true);
@@ -428,6 +433,7 @@ export default function App() {
         pass={pass}
         fmt={fmt}
         remember={remember}
+        useProxy={useProxy}
         message={msg}
         onChange={(patch) => {
           if (patch.server !== undefined) setServer(patch.server);
@@ -435,6 +441,7 @@ export default function App() {
           if (patch.pass !== undefined) setPass(patch.pass);
           if (patch.fmt !== undefined) setFmt(patch.fmt);
           if (patch.remember !== undefined) setRemember(patch.remember);
+          if (patch.useProxy !== undefined) setUseProxy(patch.useProxy);
         }}
         onConnect={connect}
         onClear={() => {

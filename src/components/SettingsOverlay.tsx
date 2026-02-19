@@ -7,6 +7,7 @@ type Props = {
   pass: string;
   fmt: string;
   remember: boolean;
+  useProxy: boolean;
   message: string;
   onChange: (patch: Record<string, any>) => void;
   onConnect: () => void;
@@ -14,7 +15,7 @@ type Props = {
 };
 
 export function SettingsOverlay(props: Props) {
-  const { open, server, user, pass, fmt, remember, message, onChange, onConnect, onClear } = props;
+  const { open, server, user, pass, fmt, remember, useProxy, message, onChange, onConnect, onClear } = props;
 
   return (
     <div id="settingsOverlay" className={open ? 'show' : ''}>
@@ -36,6 +37,17 @@ export function SettingsOverlay(props: Props) {
           </div>
           <label className="toggle">
             <input type="checkbox" checked={remember} onChange={(e) => onChange({ remember: e.target.checked })} />
+            <span className="toggleSlider" />
+          </label>
+        </div>
+
+        <div className="toggleRow">
+          <div>
+            <div className="tLabel">Use local proxy + deinterlace</div>
+            <div className="tDesc">Fixes black-screen interlaced channels by routing through /proxy and ffmpeg</div>
+          </div>
+          <label className="toggle">
+            <input type="checkbox" checked={useProxy} onChange={(e) => onChange({ useProxy: e.target.checked })} />
             <span className="toggleSlider" />
           </label>
         </div>

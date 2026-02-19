@@ -3,6 +3,7 @@ import React from 'react';
 type VirtualListProps<T> = {
   items: T[];
   selectedIndex: number;
+  active?: boolean;
   itemHeight?: number;
   overscan?: number;
   onPick: (index: number) => void;
@@ -13,6 +14,7 @@ type VirtualListProps<T> = {
 export function VirtualList<T>({
   items,
   selectedIndex,
+  active = true,
   itemHeight = 76,
   overscan = 5,
   onPick,
@@ -24,12 +26,21 @@ export function VirtualList<T>({
   const [height, setHeight] = React.useState(500);
 
   React.useEffect(() => {
-    if (ref.current) setHeight(ref.current.clientHeight);
+    const el = ref.current;
+    if (!el) return;
+
+    const syncHeight = () => setHeight(el.clientHeight);
+    syncHeight();
+
+    const obs = new ResizeObserver(syncHeight);
+    obs.observe(el);
+
+    return () => obs.disconnect();
   }, []);
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     const el = ref.current;
-    if (!el || items.length === 0) return;
+    if (!el || items.length === 0 || !active) return;
 
     const i = Math.max(0, Math.min(selectedIndex, items.length - 1));
     const top = i * itemHeight;
@@ -45,7 +56,7 @@ export function VirtualList<T>({
       el.scrollTop = nextTop;
       setScrollTop(nextTop);
     }
-  }, [itemHeight, items.length, selectedIndex]);
+  }, [active, itemHeight, items.length, selectedIndex]);
 
   const first = Math.max(0, Math.floor(scrollTop / itemHeight) - overscan);
   const last = Math.min(items.length - 1, Math.ceil((scrollTop + height) / itemHeight) + overscan);
