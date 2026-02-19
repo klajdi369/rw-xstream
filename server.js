@@ -11,6 +11,8 @@ const __dirname = path.dirname(__filename);
 const PORT = 3004;
 const HOST = '0.0.0.0';
 const DIST_DIR = path.join(__dirname, 'dist');
+const REMUX_DIR = path.join(__dirname, '.remux');
+const remuxJobs = new Map();
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -23,6 +25,8 @@ const MIME_TYPES = {
   '.gif': 'image/gif',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
+  '.m3u8': 'application/x-mpegURL',
+  '.ts': 'video/mp2t',
 };
 
 function send(res, status, type, body) {
@@ -243,6 +247,113 @@ async function handleProxyTranscode(res, url) {
   transcodeFromUrl(targetUrl.toString(), res);
 }
 
+
+function ensureDir(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+}
+
+function remuxKeyFromUrl(url) {
+  return Buffer.from(url).toString('base64url').slice(0, 40);
+}
+
+function startRemuxJob(targetUrl) {
+  const key = remuxKeyFromUrl(targetUrl);
+  if (remuxJobs.has(key)) {
+    return { key, playlistPath: path.join(REMUX_DIR, key, 'index.m3u8') };
+  }
+
+  const outDir = path.join(REMUX_DIR, key);
+  ensureDir(outDir);
+  const playlistPath = path.join(outDir, 'index.m3u8');
+
+  console.log(`[REMUX] starting key=${key} url=${targetUrl}`);
+  const ff = spawn('ffmpeg', [
+    '-hide_banner',
+    '-loglevel', 'warning',
+    '-fflags', 'nobuffer',
+    '-reconnect', '1',
+    '-reconnect_streamed', '1',
+    '-reconnect_delay_max', '2',
+    '-i', targetUrl,
+    '-map', '0:v:0',
+    '-map', '0:a:0?',
+    '-c:v', 'copy',
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    '-f', 'hls',
+    '-hls_time', '4',
+    '-hls_list_size', '6',
+    '-hls_flags', 'delete_segments+independent_segments+omit_endlist',
+    '-hls_segment_filename', path.join(outDir, 'seg_%03d.ts'),
+    playlistPath,
+  ]);
+
+  ff.stderr.on('data', (buf) => {
+    const line = String(buf || '').trim();
+    if (line) console.log(`[REMUX:${key}] ${line}`);
+  });
+
+  ff.on('close', (code) => {
+    console.log(`[REMUX] stopped key=${key} code=${code}`);
+    remuxJobs.delete(key);
+  });
+
+  remuxJobs.set(key, ff);
+  return { key, playlistPath };
+}
+
+async function waitForFile(filePath, timeoutMs = 10000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (fs.existsSync(filePath)) return true;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return false;
+}
+
+async function handleRemuxStart(res, url) {
+  const target = url.searchParams.get('url');
+  if (!target) return send(res, 400, 'application/json; charset=utf-8', JSON.stringify({ error: 'Missing url' }));
+
+  let targetUrl;
+  try {
+    targetUrl = new URL(target);
+  } catch {
+    return send(res, 400, 'application/json; charset=utf-8', JSON.stringify({ error: 'Invalid url' }));
+  }
+
+  if (!['http:', 'https:'].includes(targetUrl.protocol)) {
+    return send(res, 400, 'application/json; charset=utf-8', JSON.stringify({ error: 'Unsupported protocol' }));
+  }
+
+  const { key, playlistPath } = startRemuxJob(targetUrl.toString());
+  const ready = await waitForFile(playlistPath, 12000);
+
+  if (!ready) {
+    return send(res, 504, 'application/json; charset=utf-8', JSON.stringify({ error: 'Remux startup timeout', key }));
+  }
+
+  return send(res, 200, 'application/json; charset=utf-8', JSON.stringify({ key, manifest: `/remux/hls/${key}/index.m3u8` }));
+}
+
+function serveRemuxAsset(reqPath, res) {
+  const rel = reqPath.replace(/^\/remux\/hls/, '');
+  const filePath = path.join(REMUX_DIR, path.normalize(rel));
+  if (!filePath.startsWith(REMUX_DIR)) {
+    send(res, 403, 'text/plain; charset=utf-8', 'Forbidden');
+    return;
+  }
+
+  fs.readFile(filePath, (err, data) => {
+    if (err) {
+      send(res, 404, 'text/plain; charset=utf-8', 'Not Found');
+      return;
+    }
+    const ext = path.extname(filePath).toLowerCase();
+    send(res, 200, MIME_TYPES[ext] || 'application/octet-stream', data);
+  });
+}
+
 function serveStatic(reqPath, res) {
   const rel = reqPath === '/' ? '/index.html' : reqPath;
   const filePath = path.join(DIST_DIR, path.normalize(rel));
@@ -284,6 +395,16 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === '/proxy-transcode') {
     await handleProxyTranscode(res, url);
+    return;
+  }
+
+  if (url.pathname === '/remux/start') {
+    await handleRemuxStart(res, url);
+    return;
+  }
+
+  if (url.pathname.startsWith('/remux/hls/')) {
+    serveRemuxAsset(url.pathname, res);
     return;
   }
 

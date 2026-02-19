@@ -146,26 +146,37 @@ export default function App() {
     const preferredFmt = forceFmt ?? (fmt === 'ts' ? 'ts' : 'm3u8');
     const attemptOrder = preferredFmt === 'm3u8'
       ? [
-        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: false },
-        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: true, viaTranscode: false },
-        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: false },
-        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: true, viaTranscode: false },
-        { sourceFormat: 'm3u8' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: true },
+        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: false, viaRemux: false },
+        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: true, viaTranscode: false, viaRemux: false },
+        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: false, viaRemux: false },
+        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: true, viaTranscode: false, viaRemux: false },
+        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: false, viaRemux: true },
+        { sourceFormat: 'm3u8' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: true, viaRemux: false },
       ]
       : [
-        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: false },
-        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: true, viaTranscode: false },
-        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: false },
-        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: true, viaTranscode: false },
-        { sourceFormat: 'm3u8' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: true },
+        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: false, viaRemux: false },
+        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: true, viaTranscode: false, viaRemux: false },
+        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: false, viaRemux: false },
+        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: true, viaTranscode: false, viaRemux: false },
+        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: false, viaRemux: true },
+        { sourceFormat: 'm3u8' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: true, viaRemux: false },
       ];
 
-    const attempts = useProxy ? attemptOrder : attemptOrder.filter((a) => !a.viaProxy && !a.viaTranscode);
+    const attempts = useProxy ? attemptOrder : attemptOrder.filter((a) => !a.viaProxy && !a.viaTranscode && !a.viaRemux);
 
     setPlayingId(String(ch.stream_id));
     setHudTitle(ch.name || 'Playing');
 
-    const startAttempt = (index: number) => {
+    const ensureRemuxManifest = async (directUrl: string) => {
+      const startUrl = `${window.location.origin}/remux/start?url=${encodeURIComponent(directUrl)}`;
+      const r = await fetch(startUrl, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`remux-start-${r.status}`);
+      const data: any = await r.json();
+      if (!data?.manifest) throw new Error('remux-manifest-missing');
+      return `${window.location.origin}${data.manifest}`;
+    };
+
+    const startAttempt = async (index: number) => {
       const attempt = attempts[index];
       if (!attempt) {
         setHudSub('Cannot play this stream');
@@ -180,13 +191,14 @@ export default function App() {
       const proxyAbsolute = `${window.location.origin}${proxyRelative}`;
       const transcodeRelative = `/proxy-transcode?url=${encodeURIComponent(directUrl)}`;
       const transcodeAbsolute = `${window.location.origin}${transcodeRelative}`;
-      const url = attempt.viaTranscode
+      let url = attempt.viaTranscode
         ? transcodeAbsolute
         : (attempt.viaProxy ? proxyAbsolute : directUrl);
 
-      const modeLabel = `${attempt.playAs.toUpperCase()}${attempt.viaProxy ? ' + Proxy' : ''}${attempt.viaTranscode ? ' + FFMPEG' : ''}`;
+      const modeLabel = `${attempt.playAs.toUpperCase()}${attempt.viaProxy ? ' + Proxy' : ''}${attempt.viaRemux ? ' + REMUX' : ''}${attempt.viaTranscode ? ' + FFMPEG' : ''}`;
       setHudSub(`Connecting… ${modeLabel}`);
       wakeHud();
+      console.log('[Player] attempt', { index, modeLabel, url });
 
       let settled = false;
       let blackGuard: number | null = null;
@@ -206,18 +218,29 @@ export default function App() {
         if (attempts[index + 1]) {
           setHudSub(`⚠ ${modeLabel} failed — retrying…`);
           wakeHud();
-          setTimeout(() => startAttempt(index + 1), 200);
+          setTimeout(() => { void startAttempt(index + 1); }, 200);
         } else {
           setHudSub('Cannot play this stream');
           wakeHud();
         }
       };
 
+      if (attempt.viaRemux) {
+        try {
+          url = await ensureRemuxManifest(directUrl);
+          console.log('[Player] remux manifest ready', url);
+        } catch (err) {
+          console.warn('[Player] remux start failed', err);
+          fallback();
+          return;
+        }
+      }
+
       const armBlackGuard = () => {
         clearBlackGuard();
 
         const startedAt = Date.now();
-        const maxWaitMs = attempt.viaTranscode ? 30000 : (attempt.viaProxy ? 18000 : 10000);
+        const maxWaitMs = attempt.viaTranscode ? 30000 : (attempt.viaRemux ? 22000 : (attempt.viaProxy ? 18000 : 10000));
 
         const probe = () => {
           if (settled) return;
@@ -255,6 +278,7 @@ export default function App() {
           armBlackGuard();
         });
         hls.on(Hls.Events.ERROR, (_: any, d: any) => {
+          console.warn('[HLS][error]', d?.type, d?.details, d?.fatal);
           if (d?.fatal) fallback();
         });
         hls.attachMedia(v);
@@ -273,7 +297,10 @@ export default function App() {
           },
         );
         mtsRef.current = p;
-        p.on(mpegts.Events.ERROR, () => fallback());
+        p.on(mpegts.Events.ERROR, (t: any, d: any) => {
+          console.warn('[MPEGTS][error]', t, d);
+          fallback();
+        });
         p.attachMediaElement(v);
         p.load();
         v.play().catch(() => fallback());
@@ -293,7 +320,7 @@ export default function App() {
       v.play().catch(() => fallback());
     };
 
-    startAttempt(0);
+    void startAttempt(0);
 
     if (remember) {
       const last: LastChannel = { streamId: String(ch.stream_id), name: ch.name, catId: activeCatRef.current };
