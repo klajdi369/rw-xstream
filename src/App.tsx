@@ -143,56 +143,94 @@ export default function App() {
     const v = videoRef.current;
     if (!v) return;
 
-    stopPlayback();
-    const effective = forceFmt ?? (fmt === 'ts' ? 'ts' : 'm3u8');
-    const directUrl = `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${effective}`;
-    const url = useProxy
-      ? `/proxy?url=${encodeURIComponent(directUrl)}&deint=1`
-      : directUrl;
+    const preferredFmt = forceFmt ?? (fmt === 'ts' ? 'ts' : 'm3u8');
+    const attemptOrder = preferredFmt === 'm3u8'
+      ? [
+        { format: 'm3u8' as const, viaProxy: false },
+        { format: 'm3u8' as const, viaProxy: true },
+        { format: 'ts' as const, viaProxy: false },
+        { format: 'ts' as const, viaProxy: true },
+      ]
+      : [
+        { format: 'ts' as const, viaProxy: false },
+        { format: 'ts' as const, viaProxy: true },
+        { format: 'm3u8' as const, viaProxy: false },
+        { format: 'm3u8' as const, viaProxy: true },
+      ];
+
+    const attempts = useProxy ? attemptOrder : attemptOrder.filter((a) => !a.viaProxy);
 
     setPlayingId(String(ch.stream_id));
     setHudTitle(ch.name || 'Playing');
-    setHudSub('Connecting…');
-    wakeHud();
 
-    const fallback = () => {
-      if (effective === 'm3u8') {
-        setHudSub('⚠ Trying TS stream…');
-        setTimeout(() => playChannel(ch, 'ts'), 180);
-      } else {
+    const startAttempt = (index: number) => {
+      const attempt = attempts[index];
+      if (!attempt) {
         setHudSub('Cannot play this stream');
+        wakeHud();
+        return;
       }
-    };
 
-    if (effective === 'm3u8' && Hls.isSupported()) {
-      const hls = new Hls({ lowLatencyMode: true, maxBufferLength: 10, maxMaxBufferLength: 30 });
-      hlsRef.current = hls;
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        setHudSub('▶ Live');
-        v.play().catch(() => undefined);
+      stopPlayback();
+
+      const directUrl = `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${attempt.format}`;
+      const proxyRelative = `/proxy?url=${encodeURIComponent(directUrl)}&deint=1`;
+      const proxyAbsolute = `${window.location.origin}${proxyRelative}`;
+      const url = attempt.viaProxy ? proxyAbsolute : directUrl;
+
+      const modeLabel = `${attempt.format.toUpperCase()}${attempt.viaProxy ? ' + Proxy' : ''}`;
+      setHudSub(`Connecting… ${modeLabel}`);
+      wakeHud();
+
+      const fallback = () => {
+        if (attempts[index + 1]) {
+          setHudSub(`⚠ ${modeLabel} failed — retrying…`);
+          wakeHud();
+          setTimeout(() => startAttempt(index + 1), 200);
+        } else {
+          setHudSub('Cannot play this stream');
+          wakeHud();
+        }
+      };
+
+      if (attempt.format === 'm3u8' && Hls.isSupported()) {
+        const hls = new Hls({ lowLatencyMode: true, maxBufferLength: 10, maxMaxBufferLength: 30 });
+        hlsRef.current = hls;
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          setHudSub(`▶ Live (${modeLabel})`);
+          v.play().catch(() => undefined);
+          fetchEpg(ch.stream_id);
+        });
+        hls.on(Hls.Events.ERROR, (_: any, d: any) => {
+          if (d?.fatal) fallback();
+        });
+        hls.attachMedia(v);
+        hls.loadSource(url);
+        return;
+      }
+
+      if (attempt.format === 'ts' && mpegts.getFeatureList().mseLivePlayback) {
+        const p = mpegts.createPlayer({ type: 'mpegts', isLive: true, url }, { enableWorker: false });
+        mtsRef.current = p;
+        p.on(mpegts.Events.ERROR, () => fallback());
+        p.attachMediaElement(v);
+        p.load();
+        v.play().catch(() => fallback());
+        setHudSub(`▶ TS Live (${modeLabel})`);
         fetchEpg(ch.stream_id);
-      });
-      hls.on(Hls.Events.ERROR, (_: any, d: any) => {
-        if (d?.fatal) fallback();
-      });
-      hls.attachMedia(v);
-      hls.loadSource(url);
-    } else if (effective === 'ts' && mpegts.getFeatureList().mseLivePlayback) {
-      const p = mpegts.createPlayer({ type: 'mpegts', isLive: true, url }, { enableWorker: true });
-      mtsRef.current = p;
-      p.attachMediaElement(v);
-      p.load();
-      v.play().catch(() => undefined);
-      setHudSub('▶ TS Live');
-      fetchEpg(ch.stream_id);
-    } else {
+        return;
+      }
+
       v.src = url;
       v.oncanplay = () => {
-        setHudSub('▶ Live');
+        setHudSub(`▶ Live (${modeLabel})`);
         fetchEpg(ch.stream_id);
       };
+      v.onerror = () => fallback();
       v.play().catch(() => fallback());
-    }
+    };
+
+    startAttempt(0);
 
     if (remember) {
       const last: LastChannel = { streamId: String(ch.stream_id), name: ch.name, catId: activeCatRef.current };
