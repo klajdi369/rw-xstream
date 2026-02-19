@@ -144,22 +144,15 @@ export default function App() {
     if (!v) return;
 
     const preferredFmt = forceFmt ?? (fmt === 'ts' ? 'ts' : 'm3u8');
-    const attemptOrder = preferredFmt === 'm3u8'
+    const attemptOrder = preferredFmt === 'ts'
       ? [
-        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: false, viaRemux: false },
-        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: true, viaTranscode: false, viaRemux: false },
         { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: false, viaRemux: false },
-        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: true, viaTranscode: false, viaRemux: false },
-        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: false, viaRemux: true },
-        { sourceFormat: 'm3u8' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: true, viaRemux: false },
       ]
       : [
-        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: false, viaRemux: false },
-        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: true, viaTranscode: false, viaRemux: false },
         { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: false, viaRemux: false },
         { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: true, viaTranscode: false, viaRemux: false },
         { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: false, viaRemux: true },
-        { sourceFormat: 'm3u8' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: true, viaRemux: false },
+        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: true, viaRemux: true },
       ];
 
     const attempts = useProxy ? attemptOrder : attemptOrder.filter((a) => !a.viaProxy && !a.viaTranscode && !a.viaRemux);
@@ -167,8 +160,8 @@ export default function App() {
     setPlayingId(String(ch.stream_id));
     setHudTitle(ch.name || 'Playing');
 
-    const ensureRemuxManifest = async (directUrl: string) => {
-      const startUrl = `${window.location.origin}/remux/start?url=${encodeURIComponent(directUrl)}`;
+    const ensureRemuxManifest = async (directUrl: string, mode: 'copy' | 'transcode' = 'copy') => {
+      const startUrl = `${window.location.origin}/remux/start?mode=${mode}&url=${encodeURIComponent(directUrl)}`;
       const r = await fetch(startUrl, { cache: 'no-store' });
       if (!r.ok) throw new Error(`remux-start-${r.status}`);
       const data: any = await r.json();
@@ -189,11 +182,7 @@ export default function App() {
       const directUrl = `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${attempt.sourceFormat}`;
       const proxyRelative = `/proxy?url=${encodeURIComponent(directUrl)}&deint=1`;
       const proxyAbsolute = `${window.location.origin}${proxyRelative}`;
-      const transcodeRelative = `/proxy-transcode?url=${encodeURIComponent(directUrl)}`;
-      const transcodeAbsolute = `${window.location.origin}${transcodeRelative}`;
-      let url = attempt.viaTranscode
-        ? transcodeAbsolute
-        : (attempt.viaProxy ? proxyAbsolute : directUrl);
+      let url = attempt.viaProxy ? proxyAbsolute : directUrl;
 
       const modeLabel = `${attempt.playAs.toUpperCase()}${attempt.viaProxy ? ' + Proxy' : ''}${attempt.viaRemux ? ' + REMUX' : ''}${attempt.viaTranscode ? ' + FFMPEG' : ''}`;
       setHudSub(`Connecting… ${modeLabel}`);
@@ -216,6 +205,7 @@ export default function App() {
         clearBlackGuard();
 
         if (attempts[index + 1]) {
+          console.warn('[Player] fallback', { modeLabel, next: index + 1 });
           setHudSub(`⚠ ${modeLabel} failed — retrying…`);
           wakeHud();
           setTimeout(() => { void startAttempt(index + 1); }, 200);
@@ -227,7 +217,7 @@ export default function App() {
 
       if (attempt.viaRemux) {
         try {
-          url = await ensureRemuxManifest(directUrl);
+          url = await ensureRemuxManifest(directUrl, attempt.viaTranscode ? 'transcode' : 'copy');
           console.log('[Player] remux manifest ready', url);
         } catch (err) {
           console.warn('[Player] remux start failed', err);

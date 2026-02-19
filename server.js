@@ -252,12 +252,12 @@ function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
-function remuxKeyFromUrl(url) {
-  return Buffer.from(url).toString('base64url').slice(0, 40);
+function remuxKeyFromUrl(url, mode = 'copy') {
+  return Buffer.from(`${mode}:${url}`).toString('base64url').slice(0, 40);
 }
 
-function startRemuxJob(targetUrl) {
-  const key = remuxKeyFromUrl(targetUrl);
+function startRemuxJob(targetUrl, mode = 'copy') {
+  const key = remuxKeyFromUrl(targetUrl, mode);
   if (remuxJobs.has(key)) {
     return { key, playlistPath: path.join(REMUX_DIR, key, 'index.m3u8') };
   }
@@ -266,8 +266,9 @@ function startRemuxJob(targetUrl) {
   ensureDir(outDir);
   const playlistPath = path.join(outDir, 'index.m3u8');
 
-  console.log(`[REMUX] starting key=${key} url=${targetUrl}`);
-  const ff = spawn('ffmpeg', [
+  console.log(`[REMUX] starting key=${key} mode=${mode} url=${targetUrl}`);
+
+  const ffArgs = [
     '-hide_banner',
     '-loglevel', 'warning',
     '-fflags', 'nobuffer',
@@ -277,16 +278,39 @@ function startRemuxJob(targetUrl) {
     '-i', targetUrl,
     '-map', '0:v:0',
     '-map', '0:a:0?',
-    '-c:v', 'copy',
-    '-c:a', 'aac',
-    '-b:a', '128k',
+  ];
+
+  if (mode === 'transcode') {
+    ffArgs.push(
+      '-vf', 'yadif=0:-1:0',
+      '-c:v', 'libx264',
+      '-preset', 'veryfast',
+      '-tune', 'zerolatency',
+      '-pix_fmt', 'yuv420p',
+      '-g', '50',
+      '-keyint_min', '25',
+      '-sc_threshold', '0',
+      '-c:a', 'aac',
+      '-b:a', '128k',
+    );
+  } else {
+    ffArgs.push(
+      '-c:v', 'copy',
+      '-c:a', 'aac',
+      '-b:a', '128k',
+    );
+  }
+
+  ffArgs.push(
     '-f', 'hls',
     '-hls_time', '4',
     '-hls_list_size', '6',
     '-hls_flags', 'delete_segments+independent_segments+omit_endlist',
     '-hls_segment_filename', path.join(outDir, 'seg_%03d.ts'),
     playlistPath,
-  ]);
+  );
+
+  const ff = spawn('ffmpeg', ffArgs);
 
   ff.stderr.on('data', (buf) => {
     const line = String(buf || '').trim();
@@ -326,14 +350,15 @@ async function handleRemuxStart(res, url) {
     return send(res, 400, 'application/json; charset=utf-8', JSON.stringify({ error: 'Unsupported protocol' }));
   }
 
-  const { key, playlistPath } = startRemuxJob(targetUrl.toString());
+  const mode = url.searchParams.get('mode') === 'transcode' ? 'transcode' : 'copy';
+  const { key, playlistPath } = startRemuxJob(targetUrl.toString(), mode);
   const ready = await waitForFile(playlistPath, 12000);
 
   if (!ready) {
     return send(res, 504, 'application/json; charset=utf-8', JSON.stringify({ error: 'Remux startup timeout', key }));
   }
 
-  return send(res, 200, 'application/json; charset=utf-8', JSON.stringify({ key, manifest: `/remux/hls/${key}/index.m3u8` }));
+  return send(res, 200, 'application/json; charset=utf-8', JSON.stringify({ key, mode, manifest: `/remux/hls/${key}/index.m3u8` }));
 }
 
 function serveRemuxAsset(reqPath, res) {
@@ -352,6 +377,12 @@ function serveRemuxAsset(reqPath, res) {
     const ext = path.extname(filePath).toLowerCase();
     send(res, 200, MIME_TYPES[ext] || 'application/octet-stream', data);
   });
+}
+
+
+function handleRemuxDebug(res) {
+  const jobs = [...remuxJobs.entries()].map(([key, proc]) => ({ key, pid: proc.pid }));
+  send(res, 200, 'application/json; charset=utf-8', JSON.stringify({ active: jobs.length, jobs }));
 }
 
 function serveStatic(reqPath, res) {
@@ -405,6 +436,11 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname.startsWith('/remux/hls/')) {
     serveRemuxAsset(url.pathname, res);
+    return;
+  }
+
+  if (url.pathname === '/remux/debug') {
+    handleRemuxDebug(res);
     return;
   }
 
