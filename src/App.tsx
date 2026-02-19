@@ -209,13 +209,31 @@ export default function App() {
 
       const armBlackGuard = () => {
         clearBlackGuard();
-        blackGuard = window.setTimeout(() => {
+
+        const startedAt = Date.now();
+        const maxWaitMs = attempt.viaProxy ? 15000 : 9000;
+
+        const probe = () => {
           if (settled) return;
 
           const q = v.getVideoPlaybackQuality?.();
           const frames = q ? q.totalVideoFrames : ((v as any).webkitDecodedFrameCount || 0);
-          if (frames <= 0) fallback();
-        }, 4500);
+
+          if (frames > 0) {
+            settled = true;
+            clearBlackGuard();
+            return;
+          }
+
+          if (Date.now() - startedAt >= maxWaitMs) {
+            fallback();
+            return;
+          }
+
+          blackGuard = window.setTimeout(probe, 1800);
+        };
+
+        blackGuard = window.setTimeout(probe, 5000);
       };
 
       if (attempt.format === 'm3u8' && Hls.isSupported()) {
