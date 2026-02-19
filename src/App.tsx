@@ -60,6 +60,7 @@ export default function App() {
   const cacheRef = React.useRef<Map<string, Channel[]>>(new Map());
   const activeCatRef = React.useRef<string>('');
   const hudTimerRef = React.useRef<any>(null);
+  const playTokenRef = React.useRef(0);
 
   const apiUrl = React.useCallback((params: Record<string, any>) => {
     const u = new URL(`${normServer(server)}/player_api.php`);
@@ -143,33 +144,25 @@ export default function App() {
     const v = videoRef.current;
     if (!v) return;
 
+    const playToken = ++playTokenRef.current;
     const preferredFmt = forceFmt ?? (fmt === 'ts' ? 'ts' : 'm3u8');
     const attemptOrder = preferredFmt === 'ts'
       ? [
-        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: false, viaRemux: false },
+        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: false },
+        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: true, viaTranscode: false },
       ]
       : [
-        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: false, viaRemux: false },
-        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: true, viaTranscode: false, viaRemux: false },
-        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: false, viaRemux: true },
-        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: true, viaRemux: true },
+        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: false },
+        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: true, viaTranscode: false },
+        { sourceFormat: 'm3u8' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: true },
       ];
 
-    const attempts = useProxy ? attemptOrder : attemptOrder.filter((a) => !a.viaProxy && !a.viaTranscode && !a.viaRemux);
+    const attempts = useProxy ? attemptOrder : attemptOrder.filter((a) => !a.viaProxy && !a.viaTranscode);
 
     setPlayingId(String(ch.stream_id));
     setHudTitle(ch.name || 'Playing');
-
-    const ensureRemuxManifest = async (directUrl: string, mode: 'copy' | 'transcode' = 'copy') => {
-      const startUrl = `${window.location.origin}/remux/start?mode=${mode}&url=${encodeURIComponent(directUrl)}`;
-      const r = await fetch(startUrl, { cache: 'no-store' });
-      if (!r.ok) throw new Error(`remux-start-${r.status}`);
-      const data: any = await r.json();
-      if (!data?.manifest) throw new Error('remux-manifest-missing');
-      return `${window.location.origin}${data.manifest}`;
-    };
-
     const startAttempt = async (index: number) => {
+      if (playToken !== playTokenRef.current) return;
       const attempt = attempts[index];
       if (!attempt) {
         setHudSub('Cannot play this stream');
@@ -182,9 +175,11 @@ export default function App() {
       const directUrl = `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${attempt.sourceFormat}`;
       const proxyRelative = `/proxy?url=${encodeURIComponent(directUrl)}&deint=1`;
       const proxyAbsolute = `${window.location.origin}${proxyRelative}`;
-      let url = attempt.viaProxy ? proxyAbsolute : directUrl;
+      const transcodeRelative = `/proxy-transcode?url=${encodeURIComponent(directUrl)}`;
+      const transcodeAbsolute = `${window.location.origin}${transcodeRelative}`;
+      const url = attempt.viaTranscode ? transcodeAbsolute : (attempt.viaProxy ? proxyAbsolute : directUrl);
 
-      const modeLabel = `${attempt.playAs.toUpperCase()}${attempt.viaProxy ? ' + Proxy' : ''}${attempt.viaRemux ? ' + REMUX' : ''}${attempt.viaTranscode ? ' + FFMPEG' : ''}`;
+      const modeLabel = `${attempt.playAs.toUpperCase()}${attempt.viaProxy ? ' + Proxy' : ''}${attempt.viaTranscode ? ' + FFMPEG' : ''}`;
       setHudSub(`Connecting… ${modeLabel}`);
       wakeHud();
       console.log('[Player] attempt', { index, modeLabel, url });
@@ -200,7 +195,7 @@ export default function App() {
       };
 
       const fallback = () => {
-        if (settled) return;
+        if (settled || playToken !== playTokenRef.current) return;
         settled = true;
         clearBlackGuard();
 
@@ -215,25 +210,15 @@ export default function App() {
         }
       };
 
-      if (attempt.viaRemux) {
-        try {
-          url = await ensureRemuxManifest(directUrl, attempt.viaTranscode ? 'transcode' : 'copy');
-          console.log('[Player] remux manifest ready', url);
-        } catch (err) {
-          console.warn('[Player] remux start failed', err);
-          fallback();
-          return;
-        }
-      }
 
       const armBlackGuard = () => {
         clearBlackGuard();
 
         const startedAt = Date.now();
-        const maxWaitMs = attempt.viaTranscode ? 30000 : (attempt.viaRemux ? 22000 : (attempt.viaProxy ? 18000 : 10000));
+        const maxWaitMs = attempt.viaTranscode ? 30000 : (attempt.viaProxy ? 18000 : 10000);
 
         const probe = () => {
-          if (settled) return;
+          if (settled || playToken !== playTokenRef.current) return;
 
           const q = v.getVideoPlaybackQuality?.();
           const frames = q ? q.totalVideoFrames : ((v as any).webkitDecodedFrameCount || 0);
@@ -262,12 +247,14 @@ export default function App() {
         const hls = new Hls({ lowLatencyMode: true, maxBufferLength: 10, maxMaxBufferLength: 30 });
         hlsRef.current = hls;
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (playToken !== playTokenRef.current) return;
           setHudSub(`▶ Live (${modeLabel})`);
           v.play().catch(() => fallback());
           fetchEpg(ch.stream_id);
           armBlackGuard();
         });
         hls.on(Hls.Events.ERROR, (_: any, d: any) => {
+          if (playToken !== playTokenRef.current) return;
           console.warn('[HLS][error]', d?.type, d?.details, d?.fatal);
           if (d?.fatal) fallback();
         });
@@ -288,6 +275,7 @@ export default function App() {
         );
         mtsRef.current = p;
         p.on(mpegts.Events.ERROR, (t: any, d: any) => {
+          if (playToken !== playTokenRef.current) return;
           console.warn('[MPEGTS][error]', t, d);
           fallback();
         });
@@ -302,6 +290,7 @@ export default function App() {
 
       v.src = url;
       v.oncanplay = () => {
+        if (playToken !== playTokenRef.current) return;
         setHudSub(`▶ Live (${modeLabel})`);
         fetchEpg(ch.stream_id);
         armBlackGuard();
