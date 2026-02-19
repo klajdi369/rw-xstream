@@ -1,0 +1,10 @@
+{
+  "name": "rw-xstream",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Node.js server wrapper for IPTV player",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
