@@ -4,6 +4,7 @@ import { VirtualList } from './VirtualList';
 
 type Props = {
   open: boolean;
+  focus: 'categories' | 'channels';
   categories: Category[];
   channels: Channel[];
   selectedCategory: number;
@@ -19,14 +20,14 @@ type Props = {
 
 export function Sidebar(props: Props) {
   const {
-    open, categories, channels, selectedCategory, selectedChannel,
+    open, focus, categories, channels, selectedCategory, selectedChannel,
     categoryQuery, channelQuery, playingId,
     onCategoryQuery, onChannelQuery, onPickCategory, onPickChannel,
   } = props;
 
   return (
     <div id="sidebar" className={open ? 'open' : ''}>
-      <div className="panel" id="catPanel">
+      <div className={`panel ${focus === 'categories' ? 'active' : ''}`} id="catPanel">
         <div className="panelHead"><span className="ttl">Categories</span><span className="badge">{categories.length}</span></div>
         <div className="searchWrap"><input className="sInput" placeholder="Search…" value={categoryQuery} onChange={(e) => onCategoryQuery(e.target.value)} /></div>
         <VirtualList
@@ -41,7 +42,7 @@ export function Sidebar(props: Props) {
           )}
         />
       </div>
-      <div className="panel" id="chPanel">
+      <div className={`panel ${focus === 'channels' ? 'active' : ''}`} id="chPanel">
         <div className="panelHead"><span className="ttl">Channels</span><span className="badge">{channels.length}</span></div>
         <div className="searchWrap"><input className="sInput" placeholder="Search…" value={channelQuery} onChange={(e) => onChannelQuery(e.target.value)} /></div>
         <VirtualList

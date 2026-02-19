@@ -91,6 +91,13 @@ body { font-family: var(--font); color: var(--text); }
   border-left: 3px solid transparent;
 }
 .ttl { font-size: 19px; font-weight: 800; }
+
+.panel.active .panelHead { border-left-color: var(--foc); }
+#chPanel.active .panelHead { border-left-color: var(--acc); }
+.vScroll { scrollbar-width: thin; scrollbar-color: #2a3444 transparent; }
+.item.sel.playing { border-color: var(--acc); background: rgba(29,209,161,.1); }
+.item.playing .dot { background: var(--acc); box-shadow: 0 0 8px rgba(29,209,161,.8); }
+
 .badge { font-size: 12px; color: var(--muted); padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; }
 
 .searchWrap { padding: 10px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
