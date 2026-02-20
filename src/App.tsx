@@ -689,6 +689,7 @@ export default function App() {
     setSidebarOpen(true);
     setContentPickerOpen(true);
     setFocus('categories');
+    setSelCat(Math.max(0, rootContentTabs.findIndex((t) => String(t.category_id) === contentType)));
     setChannels([]);
     setCategories([]);
     setCatQuery('');
@@ -696,7 +697,7 @@ export default function App() {
     setHudTitle('VOD App');
     setHudSub('Choose Movies or Series');
     wakeHud();
-  }, [wakeHud]);
+  }, [contentType, rootContentTabs, wakeHud]);
 
   const switchContentMode = React.useCallback(async (next: ContentType) => {
     setContentType(next);
@@ -716,7 +717,7 @@ export default function App() {
     setHudTitle(next === 'movie' ? 'Movies' : 'Series');
     setHudSub(`Type and submit search for ${next === 'movie' ? 'movies' : 'series'}`);
     wakeHud();
-  }, [wakeHud]);
+  }, [contentType, rootContentTabs, wakeHud]);
 
   const connect = React.useCallback(async () => {
     if (!server || !user || !pass) {
@@ -876,6 +877,21 @@ export default function App() {
         return;
       }
 
+      const target = e.target as HTMLElement | null;
+      const inTextInput = !!target && (
+        target.tagName === 'INPUT'
+        || target.tagName === 'TEXTAREA'
+        || target.tagName === 'SELECT'
+        || target.isContentEditable
+      );
+      if (inTextInput) {
+        if (vodAppOpen && e.key === 'Enter') {
+          e.preventDefault();
+          void submitVodSearch(chQuery, contentType);
+        }
+        return;
+      }
+
       // Number keys for channel zapping (only when sidebar is closed and not in search)
       if (!vodAppOpen && !sidebarOpen && e.key >= '0' && e.key <= '9') {
         e.preventDefault();
@@ -985,7 +1001,8 @@ export default function App() {
       if (e.key === 'ArrowUp') {
         e.preventDefault();
         if (focus === 'categories') {
-          const next = clamp(selCat - 1, 0, Math.max(0, categories.length - 1));
+          const catCount = (vodAppOpen && contentPickerOpen) ? rootContentTabs.length : categories.length;
+          const next = clamp(selCat - 1, 0, Math.max(0, catCount - 1));
           setSelCat(next);
         } else {
           setSelCh((v) => clamp(v - 1, 0, Math.max(0, channels.length - 1)));
@@ -994,7 +1011,8 @@ export default function App() {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         if (focus === 'categories') {
-          const next = clamp(selCat + 1, 0, Math.max(0, categories.length - 1));
+          const catCount = (vodAppOpen && contentPickerOpen) ? rootContentTabs.length : categories.length;
+          const next = clamp(selCat + 1, 0, Math.max(0, catCount - 1));
           setSelCat(next);
         } else {
           setSelCh((v) => clamp(v + 1, 0, Math.max(0, channels.length - 1)));
@@ -1021,7 +1039,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [categories, channels, connect, contentPickerOpen, contentType, executeZap, focus, loadCategory, openVodApp, playChannel, playingId, rootContentTabs, selCat, selCh, settingsOpen, showToast, sidebarOpen, switchContentMode, vodAppOpen, wakeHud, zapDigits]);
+  }, [categories, chQuery, channels, connect, contentPickerOpen, contentType, executeZap, focus, loadCategory, openVodApp, playChannel, playingId, rootContentTabs, selCat, selCh, settingsOpen, showToast, sidebarOpen, submitVodSearch, switchContentMode, vodAppOpen, wakeHud, zapDigits]);
 
   return (
     <>
@@ -1050,7 +1068,7 @@ export default function App() {
         focus={focus}
         categories={vodAppOpen && contentPickerOpen ? rootContentTabs : categories}
         channels={channels}
-        selectedCategory={vodAppOpen && contentPickerOpen ? Math.max(0, rootContentTabs.findIndex((t) => String(t.category_id) === contentType)) : selCat}
+        selectedCategory={selCat}
         selectedChannel={selCh}
         categoryQuery={catQuery}
         channelQuery={chQuery}
