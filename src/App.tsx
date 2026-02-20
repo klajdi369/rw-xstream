@@ -75,6 +75,7 @@ export default function App() {
   const cacheRef = React.useRef<Map<string, Channel[]>>(new Map());
   const seriesEpisodesRef = React.useRef<Map<string, Channel[]>>(new Map());
   const currentSeriesRef = React.useRef<string | null>(null);
+  const searchCacheRef = React.useRef<Map<string, Channel[]>>(new Map());
   const activeCatRef = React.useRef<string>('');
   const hudTimerRef = React.useRef<any>(null);
   const playTokenRef = React.useRef(0);
@@ -582,6 +583,28 @@ export default function App() {
     }
   }, [apiUrl, buildDirectUrl, channels, contentType, fetchEpg, fmt, jget, pass, playVodLike, preloadNearbyChannels, remember, server, stopPlayback, useProxy, user, wakeHud]);
 
+
+  const searchVodOrSeries = React.useCallback(async (query: string) => {
+    const q = query.trim();
+    if (!q || contentType === 'live') return null;
+
+    const key = `${contentType}:${q.toLowerCase()}`;
+    const cached = searchCacheRef.current.get(key);
+    if (cached) return cached;
+
+    const action = contentType === 'movie' ? 'get_vod_streams' : 'get_series';
+    const data: any = await jget(apiUrl({ action, search: q }));
+    const list: Channel[] = (Array.isArray(data) ? data : []).map((item: any) => ({
+      ...item,
+      stream_id: item.stream_id ?? item.series_id,
+      name: item.name || item.title || 'Untitled',
+      isSeries: contentType === 'series',
+    }));
+    list.sort((a: any, b: any) => String(a.name || '').localeCompare(String(b.name || '')));
+    searchCacheRef.current.set(key, list);
+    return list;
+  }, [apiUrl, contentType, jget]);
+
   const loadCategory = React.useCallback(async (cat: Category, resetSel = true) => {
     const id = String(cat.category_id);
     currentSeriesRef.current = null;
@@ -607,14 +630,27 @@ export default function App() {
     }
 
     const q = chQuery.trim().toLowerCase();
-    const visible = q ? list.filter((c) => String(c.name || '').toLowerCase().includes(q)) : list;
+    let visible = q ? list.filter((c) => String(c.name || '').toLowerCase().includes(q)) : list;
+
+    // For VOD/Series, allow global search across all categories via API.
+    if (q && contentType !== 'live') {
+      try {
+        const globalHits = await searchVodOrSeries(q);
+        if (globalHits) visible = globalHits;
+      } catch {
+        // keep category-local filtering as fallback
+      }
+    }
+
     setChannels(visible);
     if (resetSel) setSelCh(0);
 
     setHudTitle(cat.category_name || 'Channels');
-    setHudSub(`${visible.length} ${contentType === 'live' ? 'channels' : (contentType === 'movie' ? 'movies' : 'series')}`);
+    const label = contentType === 'live' ? 'channels' : (contentType === 'movie' ? 'movies' : 'series');
+    const scope = q && contentType !== 'live' ? ' (global search)' : '';
+    setHudSub(`${visible.length} ${label}${scope}`);
     wakeHud();
-  }, [apiUrl, chQuery, contentType, jget, wakeHud]);
+  }, [apiUrl, chQuery, contentType, jget, searchVodOrSeries, wakeHud]);
 
   const connect = React.useCallback(async () => {
     if (!server || !user || !pass) {
@@ -655,6 +691,7 @@ export default function App() {
       setSelCat(0);
       setChQuery('');
       cacheRef.current.clear();
+      searchCacheRef.current.clear();
 
       localStorage.setItem(SAVE_KEY, JSON.stringify({ server, user, pass, fmt, contentType, rememberChannel: remember, useProxy }));
 
