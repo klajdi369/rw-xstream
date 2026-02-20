@@ -604,12 +604,17 @@ export default function App() {
 
     const action = type === 'movie' ? 'get_vod_streams' : 'get_series';
     const data: any = await jget(apiUrl({ action, search: q }));
-    const list: Channel[] = (Array.isArray(data) ? data : []).map((item: any) => ({
+    const normalizedQuery = q.toLowerCase();
+    const mapped: Channel[] = (Array.isArray(data) ? data : []).map((item: any) => ({
       ...item,
       stream_id: item.stream_id ?? item.series_id,
       name: item.name || item.title || 'Untitled',
       isSeries: type === 'series',
     }));
+
+    // Some providers ignore `search` and return full catalogs; enforce
+    // client-side filtering so results always match the typed query.
+    const list = mapped.filter((item) => String(item.name || '').toLowerCase().includes(normalizedQuery));
     list.sort((a: any, b: any) => String(a.name || '').localeCompare(String(b.name || '')));
     searchCacheRef.current.set(key, list);
     return list;
