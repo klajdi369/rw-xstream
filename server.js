@@ -139,11 +139,22 @@ async function handleProxy(req, res, url) {
     delete hdrs.origin;
     delete hdrs.referer;
 
-    const upstream = await fetch(targetUrl, {
+    const doFetch = () => fetch(targetUrl, {
       method: 'GET',
-      headers: hdrs,
+      headers: { ...hdrs },
       redirect: 'follow',
     });
+
+    let upstream = await doFetch();
+
+    // Retry once on 403 — IPTV servers often reject when the previous
+    // connection from the same account hasn't fully closed yet
+    if (upstream.status === 403) {
+      try { await upstream.text(); } catch { /* drain body */ }
+      console.warn(`[PROXY] got 403, retrying after 1.5s… ${targetUrl}`);
+      await new Promise((r) => setTimeout(r, 1500));
+      upstream = await doFetch();
+    }
 
     if (!upstream.ok) {
       let preview = '';

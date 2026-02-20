@@ -29,8 +29,11 @@ export function Hud({ title, subtitle, hidden, onOpenSettings, epg }: Props) {
         </div>
       </div>
       <div className="hudHint">
-        OK — open list<br />↑ ↓ — prev / next<br />← — categories<br />Back — close<br />
-        <button id="settingsBtn" onClick={onOpenSettings}>⚙ Settings</button>
+        <kbd>OK</kbd> open list<br />
+        <kbd>&#x2191;</kbd> <kbd>&#x2193;</kbd> prev / next<br />
+        <kbd>&#x2190;</kbd> categories<br />
+        <kbd>Back</kbd> close<br />
+        <button id="settingsBtn" onClick={onOpenSettings}>Settings</button>
       </div>
     </div>
   );
