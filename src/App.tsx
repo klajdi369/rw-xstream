@@ -59,6 +59,7 @@ export default function App() {
   const [catQuery, setCatQuery] = React.useState('');
   const [chQuery, setChQuery] = React.useState('');
   const [playingId, setPlayingId] = React.useState<string | null>(null);
+  const [buffering, setBuffering] = React.useState(false);
   const [activeCatName, setActiveCatName] = React.useState('Channels');
   const [epg, setEpg] = React.useState<{ nowTitle: string; nowTime: string; progress: number; next: string } | null>(null);
 
@@ -182,12 +183,14 @@ export default function App() {
     const attempts = useProxy ? attemptOrder : attemptOrder.filter((a) => !a.viaProxy && !a.viaTranscode);
 
     setPlayingId(String(ch.stream_id));
+    setBuffering(true);
     setHudTitle(ch.name || 'Playing');
     const startAttempt = async (index: number) => {
       if (playToken !== playTokenRef.current) return;
       const attempt = attempts[index];
       if (!attempt) {
         setHudSub('Cannot play this stream');
+        setBuffering(false);
         wakeHud();
         return;
       }
@@ -232,6 +235,7 @@ export default function App() {
           setTimeout(() => { void startAttempt(index + 1); }, 200);
         } else {
           setHudSub('Cannot play this stream');
+          setBuffering(false);
           wakeHud();
         }
       };
@@ -256,6 +260,7 @@ export default function App() {
           if (frames > 0 || progressed || hasAudioBytes) {
             settled = true;
             clearBlackGuard();
+            setBuffering(false);
             return;
           }
 
@@ -520,6 +525,11 @@ export default function App() {
       if (!sidebarOpen) {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
+          // Snap selection to the currently playing channel
+          if (playingId && channels.length) {
+            const playIdx = channels.findIndex((c) => String(c.stream_id) === playingId);
+            if (playIdx >= 0) setSelCh(playIdx);
+          }
           setSidebarOpen(true);
           setFocus('channels');
           return;
@@ -583,11 +593,16 @@ export default function App() {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [categories, channels, connect, executeZap, focus, loadCategory, playChannel, selCat, selCh, settingsOpen, showToast, sidebarOpen, wakeHud, zapDigits]);
+  }, [categories, channels, connect, executeZap, focus, loadCategory, playChannel, playingId, selCat, selCh, settingsOpen, showToast, sidebarOpen, wakeHud, zapDigits]);
 
   return (
     <>
       <div id="videoLayer"><video id="video" ref={videoRef} autoPlay playsInline /></div>
+
+      {/* Buffering spinner — visible while channel is loading */}
+      <div id="bufferOverlay" className={buffering ? 'show' : ''}>
+        <div className="bufferSpin" />
+      </div>
 
       <div id="resumeBadge" className={resumeLabel ? 'show' : ''}>{resumeLabel}</div>
 
