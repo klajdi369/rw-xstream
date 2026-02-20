@@ -909,6 +909,18 @@ export default function App() {
           setFocus('channels');
           return;
         }
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          setSidebarOpen(true);
+          setFocus('categories');
+          return;
+        }
+        if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          setSidebarOpen(true);
+          setFocus('channels');
+          return;
+        }
         if (e.key === 'ArrowUp') {
           e.preventDefault();
           const n = clamp(selCh - 1, 0, Math.max(0, channels.length - 1));
@@ -961,11 +973,11 @@ export default function App() {
         return;
       }
 
-      if (e.key === 'ArrowLeft' && focus === 'channels') {
+      if (e.key === 'ArrowLeft') {
         e.preventDefault();
         return setFocus('categories');
       }
-      if (e.key === 'ArrowRight' && focus === 'categories') {
+      if (e.key === 'ArrowRight') {
         e.preventDefault();
         return setFocus('channels');
       }
