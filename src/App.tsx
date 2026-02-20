@@ -75,6 +75,8 @@ export default function App() {
   const activeCatRef = React.useRef<string>('');
   const hudTimerRef = React.useRef<any>(null);
   const playTokenRef = React.useRef(0);
+  const preloadAbortRef = React.useRef<Map<string, AbortController>>(new Map());
+  const preloadStampRef = React.useRef<Map<string, number>>(new Map());
   const backendBaseRef = React.useRef(import.meta.env.DEV
     ? `${window.location.protocol}//${window.location.hostname}:3005`
     : window.location.origin);
@@ -201,6 +203,59 @@ export default function App() {
     }
   }, [apiUrl, clearEpg, decodePossiblyBase64Utf8, jget, parseEpgTs]);
 
+
+  const preloadNearbyChannels = React.useCallback((list: Channel[], centerIndex: number) => {
+    if (!list.length || !server || !user || !pass) return;
+
+    const now = Date.now();
+    const indices: number[] = [];
+    for (let i = centerIndex - 3; i <= centerIndex + 3; i += 1) {
+      if (i >= 0 && i < list.length && i !== centerIndex) indices.push(i);
+    }
+
+    const sourceFormat: 'm3u8' | 'ts' = fmt === 'ts' ? 'ts' : 'm3u8';
+
+    for (const idx of indices) {
+      const ch = list[idx];
+      if (!ch) continue;
+      const key = `${ch.stream_id}:${sourceFormat}`;
+      const last = preloadStampRef.current.get(key) || 0;
+      if (now - last < 20000) continue;
+      preloadStampRef.current.set(key, now);
+
+      const prev = preloadAbortRef.current.get(key);
+      if (prev) prev.abort();
+
+      const directUrl = `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${sourceFormat}`;
+      const warmUrl = useProxy
+        ? `${backendBaseRef.current}/proxy?url=${encodeURIComponent(directUrl)}&deint=0`
+        : directUrl;
+
+      const ctl = new AbortController();
+      preloadAbortRef.current.set(key, ctl);
+      window.setTimeout(() => ctl.abort(), 1800);
+
+      fetch(warmUrl, {
+        method: 'GET',
+        cache: 'no-store',
+        mode: useProxy ? 'same-origin' : 'no-cors',
+        signal: ctl.signal,
+      }).catch(() => {
+        // best-effort warmup only
+      }).finally(() => {
+        if (preloadAbortRef.current.get(key) === ctl) {
+          preloadAbortRef.current.delete(key);
+        }
+      });
+    }
+  }, [fmt, pass, server, useProxy, user]);
+
+
+  React.useEffect(() => () => {
+    preloadAbortRef.current.forEach((ctl) => ctl.abort());
+    preloadAbortRef.current.clear();
+  }, []);
+
   const stopPlayback = React.useCallback(() => {
     hlsRef.current?.destroy();
     hlsRef.current = null;
@@ -236,6 +291,11 @@ export default function App() {
     setPlayingId(String(ch.stream_id));
     setBuffering(true);
     setHudTitle(ch.name || 'Playing');
+    void fetchEpg(ch.stream_id);
+
+    const currentIndex = channels.findIndex((c) => String(c.stream_id) === String(ch.stream_id));
+    if (currentIndex >= 0) preloadNearbyChannels(channels, currentIndex);
+
     const startAttempt = async (index: number) => {
       if (playToken !== playTokenRef.current) return;
       const attempt = attempts[index];
@@ -423,7 +483,7 @@ export default function App() {
       const last: LastChannel = { streamId: String(ch.stream_id), name: ch.name, catId: activeCatRef.current };
       localStorage.setItem(LAST_KEY, JSON.stringify(last));
     }
-  }, [fetchEpg, fmt, pass, remember, server, stopPlayback, useProxy, user, wakeHud]);
+  }, [channels, fetchEpg, fmt, pass, preloadNearbyChannels, remember, server, stopPlayback, useProxy, user, wakeHud]);
 
   const loadCategory = React.useCallback(async (cat: Category, resetSel = true) => {
     const id = String(cat.category_id);
