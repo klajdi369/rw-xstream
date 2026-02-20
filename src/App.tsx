@@ -4,7 +4,7 @@ import mpegts from 'mpegts.js';
 import { Hud } from './components/Hud';
 import { SettingsOverlay } from './components/SettingsOverlay';
 import { Sidebar } from './components/Sidebar';
-import { Category, Channel, LastChannel } from './types/player';
+import { Category, Channel, ContentType, LastChannel } from './types/player';
 
 const SAVE_KEY = 'xtream_tv_v4';
 const LAST_KEY = 'xtream_last_ch';
@@ -45,6 +45,7 @@ export default function App() {
   const [user, setUser] = React.useState('UMYLEJ');
   const [pass, setPass] = React.useState('VFCED1');
   const [fmt, setFmt] = React.useState('m3u8');
+  const [contentType, setContentType] = React.useState<ContentType>('live');
   const [remember, setRemember] = React.useState(true);
   const [useProxy, setUseProxy] = React.useState(true);
   const [msg, setMsg] = React.useState('');
@@ -72,9 +73,13 @@ export default function App() {
   const zapTimerRef = React.useRef<any>(null);
 
   const cacheRef = React.useRef<Map<string, Channel[]>>(new Map());
+  const seriesEpisodesRef = React.useRef<Map<string, Channel[]>>(new Map());
+  const currentSeriesRef = React.useRef<string | null>(null);
   const activeCatRef = React.useRef<string>('');
   const hudTimerRef = React.useRef<any>(null);
   const playTokenRef = React.useRef(0);
+  const preloadAbortRef = React.useRef<Map<string, AbortController>>(new Map());
+  const preloadStampRef = React.useRef<Map<string, number>>(new Map());
   const backendBaseRef = React.useRef(import.meta.env.DEV
     ? `${window.location.protocol}//${window.location.hostname}:3005`
     : window.location.origin);
@@ -113,20 +118,76 @@ export default function App() {
     setEpg(null);
   }, []);
 
+  const stopEpgRefresh = React.useCallback(() => {
+    clearInterval(epgIntervalRef.current);
+    epgIntervalRef.current = null;
+  }, []);
+
+  const decodePossiblyBase64Utf8 = React.useCallback((value: any) => {
+    const raw = value == null ? '' : String(value);
+    if (!raw) return '';
+
+    const looksBase64 = /^[A-Za-z0-9+/=\r\n]+$/.test(raw) && raw.replace(/\s+/g, '').length % 4 === 0;
+    if (looksBase64) {
+      try {
+        const bin = atob(raw.replace(/\s+/g, ''));
+        const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+        return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+      } catch {
+        // fall through
+      }
+    }
+
+    // Repair common UTF-8-as-Latin1 mojibake sequences, e.g. "NjÃ«"
+    if (raw.includes('Ã') || raw.includes('Â')) {
+      try {
+        const bytes = Uint8Array.from(raw, (c) => c.charCodeAt(0) & 0xff);
+        return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+      } catch {
+        // noop
+      }
+    }
+
+    return raw;
+  }, []);
+
+  const parseEpgTs = React.useCallback((value: any) => {
+    const s = value == null ? '' : String(value).trim();
+    if (!s) return 0;
+
+    if (/^\d+$/.test(s)) {
+      const n = Number(s);
+      if (!Number.isFinite(n) || n <= 0) return 0;
+      return n > 1e12 ? Math.floor(n / 1000) : Math.floor(n);
+    }
+
+    const normalized = s.includes('T') ? s : s.replace(' ', 'T');
+    const ms = Date.parse(normalized);
+    if (!Number.isNaN(ms)) return Math.floor(ms / 1000);
+    return 0;
+  }, []);
+
   const fetchEpg = React.useCallback(async (streamId: string | number) => {
-    clearEpg();
+    stopEpgRefresh();
     try {
       const data: any = await jget(apiUrl({ action: 'get_short_epg', stream_id: String(streamId), limit: '2' }));
-      const list: any[] = data?.epg_listings || data?.Epg_listings || [];
+      const list: any[] = data?.epg_listings || data?.Epg_listings || data?.listings || [];
       if (!list.length) return;
-      const decode = (s: string) => {
-        try { return atob(s); } catch { return s; }
-      };
-      const entries = list.map((e: any) => ({
-        title: decode(e.title || e.name || ''),
-        start: parseInt(e.start || e.start_timestamp || 0, 10),
-        end: parseInt(e.end || e.stop_timestamp || e.end_timestamp || 0, 10),
-      }));
+
+      const entries = list
+        .map((e: any) => {
+          const start = parseEpgTs(e.start_timestamp ?? e.start ?? e.start_ts ?? e.begin ?? e.from);
+          const end = parseEpgTs(e.stop_timestamp ?? e.end_timestamp ?? e.end ?? e.stop ?? e.to);
+          return {
+            title: decodePossiblyBase64Utf8(e.title ?? e.name ?? e.programme_title ?? ''),
+            start,
+            end,
+          };
+        })
+        .filter((e: any) => e.start > 0 && e.end > e.start)
+        .sort((a: any, b: any) => a.start - b.start);
+
+      if (!entries.length) return;
 
       const paint = () => {
         const nowSec = Date.now() / 1000;
@@ -146,26 +207,171 @@ export default function App() {
       paint();
       epgIntervalRef.current = setInterval(paint, 30000);
     } catch {
-      clearEpg();
+      // Keep previous EPG visible on transient EPG fetch errors
+      stopEpgRefresh();
     }
-  }, [apiUrl, clearEpg, jget]);
+  }, [apiUrl, decodePossiblyBase64Utf8, jget, parseEpgTs, stopEpgRefresh]);
 
-  const stopPlayback = React.useCallback(() => {
+
+  const preloadNearbyChannels = React.useCallback((list: Channel[], centerIndex: number) => {
+    if (!list.length || !server || !user || !pass) return;
+
+    const now = Date.now();
+    const indices: number[] = [];
+    for (let i = centerIndex - 3; i <= centerIndex + 3; i += 1) {
+      if (i >= 0 && i < list.length && i !== centerIndex) indices.push(i);
+    }
+
+    const sourceFormat: 'm3u8' | 'ts' = fmt === 'ts' ? 'ts' : 'm3u8';
+
+    for (const idx of indices) {
+      const ch = list[idx];
+      if (!ch) continue;
+      const key = `${ch.stream_id}:${sourceFormat}`;
+      const last = preloadStampRef.current.get(key) || 0;
+      if (now - last < 20000) continue;
+      preloadStampRef.current.set(key, now);
+
+      const prev = preloadAbortRef.current.get(key);
+      if (prev) prev.abort();
+
+      const directUrl = `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${sourceFormat}`;
+      const warmUrl = useProxy
+        ? `${backendBaseRef.current}/proxy?url=${encodeURIComponent(directUrl)}&deint=0`
+        : directUrl;
+
+      const ctl = new AbortController();
+      preloadAbortRef.current.set(key, ctl);
+      window.setTimeout(() => ctl.abort(), 1800);
+
+      fetch(warmUrl, {
+        method: 'GET',
+        cache: 'no-store',
+        mode: useProxy ? 'same-origin' : 'no-cors',
+        signal: ctl.signal,
+      }).catch(() => {
+        // best-effort warmup only
+      }).finally(() => {
+        if (preloadAbortRef.current.get(key) === ctl) {
+          preloadAbortRef.current.delete(key);
+        }
+      });
+    }
+  }, [fmt, pass, server, useProxy, user]);
+
+
+  React.useEffect(() => () => {
+    preloadAbortRef.current.forEach((ctl) => ctl.abort());
+    preloadAbortRef.current.clear();
+  }, []);
+
+  const stopPlayback = React.useCallback((preserveEpg = false) => {
     hlsRef.current?.destroy();
     hlsRef.current = null;
     try { mtsRef.current?.destroy(); } catch { /* noop */ }
     mtsRef.current = null;
-    clearEpg();
+    if (preserveEpg) stopEpgRefresh();
+    else clearEpg();
     if (videoRef.current) {
       videoRef.current.pause();
       videoRef.current.removeAttribute('src');
       videoRef.current.load();
     }
-  }, [clearEpg]);
+  }, [clearEpg, stopEpgRefresh]);
+
+
+  const buildDirectUrl = React.useCallback((ch: Channel, sourceFormat?: string) => {
+    if (contentType === 'live') {
+      const ext = sourceFormat || 'm3u8';
+      return `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${ext}`;
+    }
+
+    const ext = ch.container_extension || sourceFormat || 'mp4';
+    if (contentType === 'movie') {
+      return `${normServer(server)}/movie/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${ext}`;
+    }
+
+    const epId = ch.episode_id ?? ch.stream_id;
+    return `${normServer(server)}/series/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(epId))}.${ext}`;
+  }, [contentType, pass, server, user]);
+
+  const playVodLike = React.useCallback((ch: Channel) => {
+    const v = videoRef.current;
+    if (!v) return;
+
+    stopPlayback(true);
+    clearEpg();
+    setBuffering(true);
+    setPlayingId(String(ch.stream_id));
+    setHudTitle(ch.name || 'Playing');
+    setHudSub(`Connecting… ${contentType === 'movie' ? 'MOVIE' : 'SERIES'}`);
+    wakeHud();
+
+    const directUrl = buildDirectUrl(ch, ch.container_extension || 'mp4');
+    const url = useProxy
+      ? `${backendBaseRef.current}/proxy?url=${encodeURIComponent(directUrl)}&deint=0`
+      : directUrl;
+
+    v.src = url;
+    v.oncanplay = () => {
+      setHudSub(`▶ ${contentType === 'movie' ? 'Movie' : 'Episode'} Live`);
+      setBuffering(false);
+    };
+    v.onerror = () => {
+      setHudSub('Cannot play this stream');
+      setBuffering(false);
+    };
+    v.play().catch(() => {
+      setHudSub('Cannot play this stream');
+      setBuffering(false);
+    });
+  }, [buildDirectUrl, clearEpg, contentType, stopPlayback, useProxy, wakeHud]);
 
   const playChannel = React.useCallback((ch: Channel, forceFmt?: 'm3u8' | 'ts') => {
     const v = videoRef.current;
     if (!v) return;
+
+    if (contentType === 'series' && ch.isSeries) {
+      const sid = String(ch.series_id || ch.stream_id);
+      currentSeriesRef.current = sid;
+      clearEpg();
+      setHudSub('Loading episodes…');
+      wakeHud();
+      void (async () => {
+        try {
+          let episodes = seriesEpisodesRef.current.get(sid);
+          if (!episodes) {
+            const info: any = await jget(apiUrl({ action: 'get_series_info', series_id: sid }));
+            const rawEpisodes = info?.episodes || {};
+            const flat: any[] = Array.isArray(rawEpisodes)
+              ? rawEpisodes
+              : Object.values(rawEpisodes).flatMap((v: any) => Array.isArray(v) ? v : []);
+            episodes = flat
+              .map((e: any, i: number) => ({
+                stream_id: e.id ?? e.episode_id ?? `${sid}_${i}`,
+                episode_id: e.id ?? e.episode_id,
+                name: String(e.title || e.name || `Episode ${i + 1}`),
+                container_extension: e.container_extension || 'mp4',
+                isEpisode: true,
+              }))
+              .filter((e: any) => !!e.episode_id);
+            seriesEpisodesRef.current.set(sid, episodes);
+          }
+          setChannels(episodes || []);
+          setSelCh(0);
+          setFocus('channels');
+          setHudSub(`${(episodes || []).length} episodes`);
+        } catch {
+          setHudSub('Failed to load episodes');
+        }
+      })();
+      return;
+    }
+
+    if (contentType !== 'live') {
+      playVodLike(ch);
+      return;
+    }
 
     const playToken = ++playTokenRef.current;
     const preferredFmt = forceFmt ?? (fmt === 'ts' ? 'ts' : 'm3u8');
@@ -176,7 +382,7 @@ export default function App() {
       ]
       : [
         { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: false },
-        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: true, viaTranscode: false },
+        // { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: true, viaTranscode: false },
         { sourceFormat: 'm3u8' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: true },
       ];
 
@@ -185,6 +391,11 @@ export default function App() {
     setPlayingId(String(ch.stream_id));
     setBuffering(true);
     setHudTitle(ch.name || 'Playing');
+    void fetchEpg(ch.stream_id);
+
+    const currentIndex = channels.findIndex((c) => String(c.stream_id) === String(ch.stream_id));
+    if (currentIndex >= 0) preloadNearbyChannels(channels, currentIndex);
+
     const startAttempt = async (index: number) => {
       if (playToken !== playTokenRef.current) return;
       const attempt = attempts[index];
@@ -195,13 +406,21 @@ export default function App() {
         return;
       }
 
-      stopPlayback();
+      stopPlayback(true);
       // Brief pause to let old connections drain — prevents 403 from
-      // IPTV servers that reject concurrent connections per account
-      await new Promise((r) => setTimeout(r, index === 0 ? 150 : 300));
+      // IPTV servers that reject concurrent connections per account.
+      // We wait longer specifically when switching from direct HLS to
+      // proxy requests, because providers can keep the previous HLS
+      // session alive for a short window and reject the new one.
+      const prevAttempt = index > 0 ? attempts[index - 1] : null;
+      const switchingDirectToProxy = !!(attempt.viaProxy && prevAttempt && !prevAttempt.viaProxy);
+      const waitMs = switchingDirectToProxy
+        ? 1800
+        : (index === 0 ? 150 : 300);
+      await new Promise((r) => setTimeout(r, waitMs));
       if (playToken !== playTokenRef.current) return;
 
-      const directUrl = `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${attempt.sourceFormat}`;
+      const directUrl = buildDirectUrl(ch, attempt.sourceFormat);
       const proxyRelative = `/proxy?url=${encodeURIComponent(directUrl)}&deint=1`;
       const proxyAbsolute = `${backendBaseRef.current}${proxyRelative}`;
       const transcodeRelative = `/proxy-transcode?url=${encodeURIComponent(directUrl)}`;
@@ -245,8 +464,12 @@ export default function App() {
         clearBlackGuard();
 
         const startedAt = Date.now();
-        // Faster timeouts: direct 4s, proxy 7s, transcode 20s
-        const maxWaitMs = attempt.viaTranscode ? 20000 : (attempt.viaProxy ? 7000 : 4000);
+        const isDirectHls = attempt.playAs === 'm3u8' && !attempt.viaProxy && !attempt.viaTranscode;
+        // Prefer quicker fallback for direct HLS quirks, while keeping
+        // proxy/transcode windows long enough for startup.
+        const maxWaitMs = attempt.viaTranscode
+          ? 20000
+          : (attempt.viaProxy ? 7000 : (isDirectHls ? 2600 : 4000));
 
         const probe = () => {
           if (settled || playToken !== playTokenRef.current) return;
@@ -272,8 +495,8 @@ export default function App() {
           blackGuard = window.setTimeout(probe, 800);
         };
 
-        // First probe after 2.5s (was 6.5s)
-        blackGuard = window.setTimeout(probe, 2500);
+        const firstProbeMs = isDirectHls ? 1200 : 2500;
+        blackGuard = window.setTimeout(probe, firstProbeMs);
       };
 
       if (attempt.playAs === 'm3u8' && Hls.isSupported()) {
@@ -283,13 +506,34 @@ export default function App() {
           if (playToken !== playTokenRef.current) return;
           setHudSub(`▶ Live (${modeLabel})`);
           v.play().catch(() => fallback());
-          fetchEpg(ch.stream_id);
           armBlackGuard();
         });
+        let nonFatalHlsErrorScore = 0;
+        const hlsStartedAt = Date.now();
         hls.on(Hls.Events.ERROR, (_: any, d: any) => {
           if (playToken !== playTokenRef.current) return;
           console.warn('[HLS][error]', d?.type, d?.details, d?.fatal);
-          if (d?.fatal) fallback();
+          if (d?.fatal) {
+            fallback();
+            return;
+          }
+
+          const suspiciousDetails = new Set([
+            'fragParsingError',
+            'bufferAppendError',
+            'bufferAddCodecError',
+            'manifestIncompatibleCodecsError',
+            'fragDecryptError',
+          ]);
+          const isDirectHls = !attempt.viaProxy && !attempt.viaTranscode;
+          if (isDirectHls && suspiciousDetails.has(String(d?.details || ''))) {
+            nonFatalHlsErrorScore += 1;
+            const elapsedMs = Date.now() - hlsStartedAt;
+            if (nonFatalHlsErrorScore >= 2 || elapsedMs >= 2200) {
+              console.warn('[HLS] early fallback due to repeated parsing/buffer errors');
+              fallback();
+            }
+          }
         });
         hls.attachMedia(v);
         hls.loadSource(url);
@@ -316,7 +560,6 @@ export default function App() {
         p.load();
         v.play().catch(() => fallback());
         setHudSub(`▶ TS Live (${modeLabel})`);
-        fetchEpg(ch.stream_id);
         armBlackGuard();
         return;
       }
@@ -325,7 +568,6 @@ export default function App() {
       v.oncanplay = () => {
         if (playToken !== playTokenRef.current) return;
         setHudSub(`▶ Live (${modeLabel})`);
-        fetchEpg(ch.stream_id);
         armBlackGuard();
       };
       v.onerror = () => fallback();
@@ -338,17 +580,28 @@ export default function App() {
       const last: LastChannel = { streamId: String(ch.stream_id), name: ch.name, catId: activeCatRef.current };
       localStorage.setItem(LAST_KEY, JSON.stringify(last));
     }
-  }, [fetchEpg, fmt, pass, remember, server, stopPlayback, useProxy, user, wakeHud]);
+  }, [apiUrl, buildDirectUrl, channels, contentType, fetchEpg, fmt, jget, pass, playVodLike, preloadNearbyChannels, remember, server, stopPlayback, useProxy, user, wakeHud]);
 
   const loadCategory = React.useCallback(async (cat: Category, resetSel = true) => {
     const id = String(cat.category_id);
+    currentSeriesRef.current = null;
     activeCatRef.current = id;
     setActiveCatName(cat.category_name || 'Channels');
 
     let list = cacheRef.current.get(id);
     if (!list) {
-      const data: any = await jget(apiUrl({ action: 'get_live_streams', category_id: id }));
-      list = Array.isArray(data) ? data : [];
+      const actionByType: Record<ContentType, string> = {
+        live: 'get_live_streams',
+        movie: 'get_vod_streams',
+        series: 'get_series',
+      };
+      const data: any = await jget(apiUrl({ action: actionByType[contentType], category_id: id }));
+      list = (Array.isArray(data) ? data : []).map((item: any) => ({
+        ...item,
+        stream_id: item.stream_id ?? item.series_id,
+        name: item.name || item.title || 'Untitled',
+        isSeries: contentType === 'series',
+      }));
       list.sort((a: any, b: any) => String(a.name || '').localeCompare(String(b.name || '')));
       cacheRef.current.set(id, list);
     }
@@ -359,9 +612,9 @@ export default function App() {
     if (resetSel) setSelCh(0);
 
     setHudTitle(cat.category_name || 'Channels');
-    setHudSub(`${visible.length} channels`);
+    setHudSub(`${visible.length} ${contentType === 'live' ? 'channels' : (contentType === 'movie' ? 'movies' : 'series')}`);
     wakeHud();
-  }, [apiUrl, chQuery, jget, wakeHud]);
+  }, [apiUrl, chQuery, contentType, jget, wakeHud]);
 
   const connect = React.useCallback(async () => {
     if (!server || !user || !pass) {
@@ -385,10 +638,17 @@ export default function App() {
       setConnectProgress(45);
       setSettingsProgress(45);
 
-      const raw: any = await jget(apiUrl({ action: 'get_live_categories' }));
+      const categoryAction: Record<ContentType, string> = {
+        live: 'get_live_categories',
+        movie: 'get_vod_categories',
+        series: 'get_series_categories',
+      };
+      const raw: any = await jget(apiUrl({ action: categoryAction[contentType] }));
       const all = (Array.isArray(raw) ? raw : []) as Category[];
       all.sort((a, b) => Number(a.category_id) - Number(b.category_id));
-      const filtered = all.filter((c) => String(c.category_name || '').toUpperCase().includes('ALBANIA'));
+      const filtered = contentType === 'live'
+        ? all.filter((c) => String(c.category_name || '').toUpperCase().includes('ALBANIA'))
+        : all;
 
       setAllCategories(filtered);
       setCategories(filtered);
@@ -396,7 +656,7 @@ export default function App() {
       setChQuery('');
       cacheRef.current.clear();
 
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ server, user, pass, fmt, rememberChannel: remember, useProxy }));
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ server, user, pass, fmt, contentType, rememberChannel: remember, useProxy }));
 
       setConnectMsg('Loading channels…');
       setConnectProgress(70);
@@ -408,7 +668,7 @@ export default function App() {
       setSettingsProgress(90);
 
       const last: LastChannel | null = JSON.parse(localStorage.getItem(LAST_KEY) || 'null');
-      if (last && remember) {
+      if (contentType === 'live' && last && remember) {
         const cat = filtered.find((c) => String(c.category_id) === String(last.catId)) || filtered[0];
         if (cat) {
           await loadCategory(cat, false);
@@ -428,7 +688,7 @@ export default function App() {
       setConnectProgress(100);
       setSettingsProgress(100);
       setSettingsOpen(false);
-      setMsg(`Connected! ${filtered.length} categories.`);
+      setMsg(`Connected! ${filtered.length} ${contentType} categories.`);
       setMsgIsError(false);
       setHudTitle('Ready');
       setHudSub('OK to open channel list');
@@ -443,7 +703,7 @@ export default function App() {
       setConnecting(false);
       setConnectProgress(0);
     }
-  }, [apiUrl, fmt, jget, loadCategory, pass, playChannel, remember, server, useProxy, user, wakeHud]);
+  }, [apiUrl, contentType, fmt, jget, loadCategory, pass, playChannel, remember, server, useProxy, user, wakeHud]);
 
   React.useEffect(() => {
     const saved: any = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}');
@@ -451,6 +711,7 @@ export default function App() {
     if (saved.user) setUser(saved.user);
     if (saved.pass) setPass(saved.pass);
     if (saved.fmt) setFmt(saved.fmt);
+    if (saved.contentType) setContentType(saved.contentType);
     if (saved.rememberChannel !== undefined) setRemember(saved.rememberChannel !== false);
     if (saved.useProxy !== undefined) setUseProxy(saved.useProxy !== false);
 
@@ -487,6 +748,7 @@ export default function App() {
 
   // Number zap: type digits to jump to a channel number
   const executeZap = React.useCallback((digits: string) => {
+    if (contentType !== 'live') return;
     const num = parseInt(digits, 10);
     if (isNaN(num) || num < 1 || !channels.length) return;
     const idx = clamp(num - 1, 0, channels.length - 1);
@@ -496,7 +758,7 @@ export default function App() {
       playChannel(ch);
       showToast(ch.name || `Channel ${num}`);
     }
-  }, [channels, playChannel, showToast]);
+  }, [channels, contentType, playChannel, showToast]);
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -507,7 +769,7 @@ export default function App() {
       }
 
       // Number keys for channel zapping (only when sidebar is closed and not in search)
-      if (!sidebarOpen && e.key >= '0' && e.key <= '9') {
+      if (contentType === 'live' && !sidebarOpen && e.key >= '0' && e.key <= '9') {
         e.preventDefault();
         const newDigits = zapDigits + e.key;
         setZapDigits(newDigits);
@@ -535,18 +797,20 @@ export default function App() {
           return;
         }
         if (e.key === 'ArrowUp') {
+          e.preventDefault();
           const n = clamp(selCh - 1, 0, Math.max(0, channels.length - 1));
           setSelCh(n);
-          if (channels[n]) {
+          if (contentType === 'live' && channels[n]) {
             playChannel(channels[n]);
             showToast(channels[n].name || 'Channel');
           }
           return;
         }
         if (e.key === 'ArrowDown') {
+          e.preventDefault();
           const n = clamp(selCh + 1, 0, Math.max(0, channels.length - 1));
           setSelCh(n);
-          if (channels[n]) {
+          if (contentType === 'live' && channels[n]) {
             playChannel(channels[n]);
             showToast(channels[n].name || 'Channel');
           }
@@ -555,15 +819,29 @@ export default function App() {
       }
 
       if (e.key === 'Escape' || e.key === 'Backspace') {
+        e.preventDefault();
+        if (contentType === 'series' && focus === 'channels' && currentSeriesRef.current) {
+          const cat = categories[selCat];
+          currentSeriesRef.current = null;
+          if (cat) void loadCategory(cat, false);
+          return;
+        }
         if (focus === 'categories') setFocus('channels');
         else setSidebarOpen(false);
         return;
       }
 
-      if (e.key === 'ArrowLeft' && focus === 'channels') return setFocus('categories');
-      if (e.key === 'ArrowRight' && focus === 'categories') return setFocus('channels');
+      if (e.key === 'ArrowLeft' && focus === 'channels') {
+        e.preventDefault();
+        return setFocus('categories');
+      }
+      if (e.key === 'ArrowRight' && focus === 'categories') {
+        e.preventDefault();
+        return setFocus('channels');
+      }
 
       if (e.key === 'ArrowUp') {
+        e.preventDefault();
         if (focus === 'categories') {
           const next = clamp(selCat - 1, 0, Math.max(0, categories.length - 1));
           setSelCat(next);
@@ -572,6 +850,7 @@ export default function App() {
         }
       }
       if (e.key === 'ArrowDown') {
+        e.preventDefault();
         if (focus === 'categories') {
           const next = clamp(selCat + 1, 0, Math.max(0, categories.length - 1));
           setSelCat(next);
@@ -580,20 +859,22 @@ export default function App() {
         }
       }
       if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
         if (focus === 'categories') {
           const cat = categories[selCat];
           if (cat) loadCategory(cat, true);
           setFocus('channels');
         } else if (channels[selCh]) {
-          playChannel(channels[selCh]);
-          setSidebarOpen(false);
+          const picked = channels[selCh];
+          playChannel(picked);
+          if (!(contentType === 'series' && picked?.isSeries)) setSidebarOpen(false);
         }
       }
     };
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [categories, channels, connect, executeZap, focus, loadCategory, playChannel, playingId, selCat, selCh, settingsOpen, showToast, sidebarOpen, wakeHud, zapDigits]);
+  }, [categories, channels, connect, contentType, executeZap, focus, loadCategory, playChannel, playingId, selCat, selCh, settingsOpen, showToast, sidebarOpen, wakeHud, zapDigits]);
 
   return (
     <>
@@ -639,8 +920,9 @@ export default function App() {
         onPickChannel={(i) => {
           setSelCh(i);
           if (channels[i]) {
-            playChannel(channels[i]);
-            setSidebarOpen(false);
+            const picked = channels[i];
+            playChannel(picked);
+            if (!(contentType === 'series' && picked?.isSeries)) setSidebarOpen(false);
           }
         }}
       />
@@ -653,6 +935,7 @@ export default function App() {
         user={user}
         pass={pass}
         fmt={fmt}
+        contentType={contentType}
         remember={remember}
         useProxy={useProxy}
         message={msg}
@@ -663,6 +946,7 @@ export default function App() {
           if (patch.user !== undefined) setUser(patch.user);
           if (patch.pass !== undefined) setPass(patch.pass);
           if (patch.fmt !== undefined) setFmt(patch.fmt);
+          if (patch.contentType !== undefined) setContentType(patch.contentType);
           if (patch.remember !== undefined) setRemember(patch.remember);
           if (patch.useProxy !== undefined) setUseProxy(patch.useProxy);
         }}

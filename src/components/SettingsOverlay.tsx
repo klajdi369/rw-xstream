@@ -6,6 +6,7 @@ type Props = {
   user: string;
   pass: string;
   fmt: string;
+  contentType: 'live' | 'movie' | 'series';
   remember: boolean;
   useProxy: boolean;
   message: string;
@@ -17,7 +18,7 @@ type Props = {
 };
 
 export function SettingsOverlay(props: Props) {
-  const { open, server, user, pass, fmt, remember, useProxy, message, isError, progress, onChange, onConnect, onClear } = props;
+  const { open, server, user, pass, fmt, contentType, remember, useProxy, message, isError, progress, onChange, onConnect, onClear } = props;
 
   return (
     <div id="settingsOverlay" className={open ? 'show' : ''}>
@@ -27,6 +28,17 @@ export function SettingsOverlay(props: Props) {
         <div className="row2">
           <div className="field"><label>Server URL</label><input value={server} onChange={(e) => onChange({ server: e.target.value })} placeholder="http://server:8080" /></div>
           <div className="field"><label>Format</label><input value={fmt} onChange={(e) => onChange({ fmt: e.target.value })} placeholder="m3u8 or ts" /></div>
+        </div>
+        <div className="row2">
+          <div className="field">
+            <label>Content</label>
+            <select value={contentType} onChange={(e) => onChange({ contentType: e.target.value })}>
+              <option value="live">Live TV</option>
+              <option value="movie">Movies (VOD)</option>
+              <option value="series">Series</option>
+            </select>
+          </div>
+          <div />
         </div>
         <div className="row2">
           <div className="field"><label>Username</label><input value={user} onChange={(e) => onChange({ user: e.target.value })} placeholder="username" /></div>

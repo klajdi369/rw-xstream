@@ -147,12 +147,13 @@ async function handleProxy(req, res, url) {
 
     let upstream = await doFetch();
 
-    // Retry once on 403 — IPTV servers often reject when the previous
-    // connection from the same account hasn't fully closed yet
-    if (upstream.status === 403) {
+    // Retry 403 with backoff — IPTV providers sometimes keep previous
+    // HLS sessions alive briefly and reject immediate reconnects.
+    for (const delayMs of [1200, 2200]) {
+      if (upstream.status !== 403) break;
       try { await upstream.text(); } catch { /* drain body */ }
-      console.warn(`[PROXY] got 403, retrying after 1.5s… ${targetUrl}`);
-      await new Promise((r) => setTimeout(r, 1500));
+      console.warn(`[PROXY] got 403, retrying after ${delayMs}ms… ${targetUrl}`);
+      await new Promise((r) => setTimeout(r, delayMs));
       upstream = await doFetch();
     }
 

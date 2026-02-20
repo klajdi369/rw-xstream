@@ -315,6 +315,17 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   box-shadow: 0 0 0 3px rgba(58, 160, 255, .12);
 }
 
+.field select {
+  font-size: 17px; padding: 13px 16px; border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, .10);
+  background: rgba(0, 0, 0, .30); color: var(--text); outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.field select:focus {
+  border-color: rgba(58, 160, 255, .7);
+  box-shadow: 0 0 0 3px rgba(58, 160, 255, .12);
+}
+
 /* Toggle row */
 .toggleRow {
   display: flex; align-items: center; justify-content: space-between;
