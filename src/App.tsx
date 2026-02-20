@@ -45,8 +45,9 @@ export default function App() {
   const [user, setUser] = React.useState('UMYLEJ');
   const [pass, setPass] = React.useState('VFCED1');
   const [fmt, setFmt] = React.useState('m3u8');
-  const [contentType, setContentType] = React.useState<ContentType>('live');
+  const [contentType, setContentType] = React.useState<ContentType>('movie');
   const [contentPickerOpen, setContentPickerOpen] = React.useState(false);
+  const [vodAppOpen, setVodAppOpen] = React.useState(false);
   const [remember, setRemember] = React.useState(true);
   const [useProxy, setUseProxy] = React.useState(true);
   const [msg, setMsg] = React.useState('');
@@ -88,7 +89,6 @@ export default function App() {
 
 
   const rootContentTabs: Category[] = React.useMemo(() => ([
-    { category_id: 'live', category_name: 'Live TV' },
     { category_id: 'movie', category_name: 'Movies' },
     { category_id: 'series', category_name: 'Series' },
   ]), []);
@@ -290,19 +290,20 @@ export default function App() {
 
 
   const buildDirectUrl = React.useCallback((ch: Channel, sourceFormat?: string) => {
-    if (contentType === 'live') {
+    const mode: ContentType = vodAppOpen ? contentType : 'live';
+    if (mode === 'live') {
       const ext = sourceFormat || 'm3u8';
       return `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${ext}`;
     }
 
     const ext = ch.container_extension || sourceFormat || 'mp4';
-    if (contentType === 'movie') {
+    if (mode === 'movie') {
       return `${normServer(server)}/movie/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${ext}`;
     }
 
     const epId = ch.episode_id ?? ch.stream_id;
     return `${normServer(server)}/series/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(epId))}.${ext}`;
-  }, [contentType, pass, server, user]);
+  }, [contentType, pass, server, user, vodAppOpen]);
 
   const playVodLike = React.useCallback((ch: Channel) => {
     const v = videoRef.current;
@@ -340,7 +341,7 @@ export default function App() {
     const v = videoRef.current;
     if (!v) return;
 
-    if (contentType === 'series' && ch.isSeries) {
+    if (vodAppOpen && contentType === 'series' && ch.isSeries) {
       const sid = String(ch.series_id || ch.stream_id);
       currentSeriesRef.current = sid;
       clearEpg();
@@ -377,7 +378,7 @@ export default function App() {
       return;
     }
 
-    if (contentType !== 'live') {
+    if (vodAppOpen && contentType !== 'live') {
       playVodLike(ch);
       return;
     }
@@ -589,7 +590,7 @@ export default function App() {
       const last: LastChannel = { streamId: String(ch.stream_id), name: ch.name, catId: activeCatRef.current };
       localStorage.setItem(LAST_KEY, JSON.stringify(last));
     }
-  }, [apiUrl, buildDirectUrl, channels, contentType, fetchEpg, fmt, jget, pass, playVodLike, preloadNearbyChannels, remember, server, stopPlayback, useProxy, user, wakeHud]);
+  }, [apiUrl, buildDirectUrl, channels, contentType, fetchEpg, fmt, jget, pass, playVodLike, preloadNearbyChannels, remember, server, stopPlayback, useProxy, user, vodAppOpen, wakeHud]);
 
 
   const searchVodOrSeries = React.useCallback(async (query: string, typeOverride?: ContentType) => {
@@ -682,6 +683,21 @@ export default function App() {
   }, [apiUrl, chQuery, contentType, jget, wakeHud]);
 
 
+
+  const openVodApp = React.useCallback(() => {
+    setVodAppOpen(true);
+    setSidebarOpen(true);
+    setContentPickerOpen(true);
+    setFocus('categories');
+    setChannels([]);
+    setCategories([]);
+    setCatQuery('');
+    setChQuery('');
+    setHudTitle('VOD App');
+    setHudSub('Choose Movies or Series');
+    wakeHud();
+  }, [wakeHud]);
+
   const switchContentMode = React.useCallback(async (next: ContentType) => {
     setContentType(next);
     setChQuery('');
@@ -693,33 +709,14 @@ export default function App() {
     searchCacheRef.current.clear();
     seriesEpisodesRef.current.clear();
 
-    if (next !== 'live') {
-      setAllCategories([]);
-      setCategories([]);
-      setChannels([]);
-      setFocus('channels');
-      setHudTitle(next === 'movie' ? 'Movies' : 'Series');
-      setHudSub(`Type and submit search for ${next === 'movie' ? 'movies' : 'series'}`);
-      wakeHud();
-      return;
-    }
-
-    const categoryAction: Record<ContentType, string> = {
-      live: 'get_live_categories',
-      movie: 'get_vod_categories',
-      series: 'get_series_categories',
-    };
-    const raw: any = await jget(apiUrl({ action: categoryAction[next] }));
-    const all = (Array.isArray(raw) ? raw : []) as Category[];
-    all.sort((a, b) => Number(a.category_id) - Number(b.category_id));
-    const filtered = all.filter((c) => String(c.category_name || '').toUpperCase().includes('ALBANIA'));
-
-    setAllCategories(filtered);
-    setCategories(filtered);
+    setAllCategories([]);
+    setCategories([]);
+    setChannels([]);
     setFocus('channels');
-    if (filtered[0]) await loadCategory(filtered[0], true, next);
-    else setChannels([]);
-  }, [apiUrl, jget, loadCategory, wakeHud]);
+    setHudTitle(next === 'movie' ? 'Movies' : 'Series');
+    setHudSub(`Type and submit search for ${next === 'movie' ? 'movies' : 'series'}`);
+    wakeHud();
+  }, [wakeHud]);
 
   const connect = React.useCallback(async () => {
     if (!server || !user || !pass) {
@@ -744,7 +741,9 @@ export default function App() {
       setSettingsProgress(45);
 
       const initialType: ContentType = 'live';
-      setContentType(initialType);
+      setVodAppOpen(false);
+      setContentPickerOpen(false);
+      setContentType('live');
 
       const categoryAction: Record<ContentType, string> = {
         live: 'get_live_categories',
@@ -849,7 +848,7 @@ export default function App() {
   }, [allCategories, catQuery]);
 
   React.useEffect(() => {
-    if (contentType !== 'live') return;
+    if (vodAppOpen) return;
     const cat = categories[selCat];
     if (!cat) return;
     loadCategory(cat, false);
@@ -857,7 +856,7 @@ export default function App() {
 
   // Number zap: type digits to jump to a channel number
   const executeZap = React.useCallback((digits: string) => {
-    if (contentType !== 'live') return;
+    if (vodAppOpen) return;
     const num = parseInt(digits, 10);
     if (isNaN(num) || num < 1 || !channels.length) return;
     const idx = clamp(num - 1, 0, channels.length - 1);
@@ -867,7 +866,7 @@ export default function App() {
       playChannel(ch);
       showToast(ch.name || `Channel ${num}`);
     }
-  }, [channels, contentType, playChannel, showToast]);
+  }, [channels, contentType, playChannel, showToast, vodAppOpen]);
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -878,7 +877,7 @@ export default function App() {
       }
 
       // Number keys for channel zapping (only when sidebar is closed and not in search)
-      if (contentType === 'live' && !sidebarOpen && e.key >= '0' && e.key <= '9') {
+      if (!vodAppOpen && !sidebarOpen && e.key >= '0' && e.key <= '9') {
         e.preventDefault();
         const newDigits = zapDigits + e.key;
         setZapDigits(newDigits);
@@ -896,9 +895,7 @@ export default function App() {
       if (!sidebarOpen) {
         if (e.key === 'Escape' || e.key === 'Backspace') {
           e.preventDefault();
-          setSidebarOpen(true);
-          setContentPickerOpen(true);
-          setFocus('categories');
+          openVodApp();
           return;
         }
         if (e.key === 'Enter' || e.key === ' ') {
@@ -916,7 +913,7 @@ export default function App() {
           e.preventDefault();
           const n = clamp(selCh - 1, 0, Math.max(0, channels.length - 1));
           setSelCh(n);
-          if (contentType === 'live' && channels[n]) {
+          if (!vodAppOpen && channels[n]) {
             playChannel(channels[n]);
             showToast(channels[n].name || 'Channel');
           }
@@ -926,7 +923,7 @@ export default function App() {
           e.preventDefault();
           const n = clamp(selCh + 1, 0, Math.max(0, channels.length - 1));
           setSelCh(n);
-          if (contentType === 'live' && channels[n]) {
+          if (!vodAppOpen && channels[n]) {
             playChannel(channels[n]);
             showToast(channels[n].name || 'Channel');
           }
@@ -937,7 +934,15 @@ export default function App() {
       if (e.key === 'Escape' || e.key === 'Backspace') {
         e.preventDefault();
         if (contentPickerOpen) {
-          setSidebarOpen(false);
+          if (vodAppOpen) {
+            setVodAppOpen(false);
+            setContentPickerOpen(false);
+            setSidebarOpen(false);
+            setContentType('live');
+            setChQuery('');
+          } else {
+            setSidebarOpen(false);
+          }
           return;
         }
         if (contentType === 'series' && focus === 'channels' && currentSeriesRef.current) {
@@ -946,8 +951,13 @@ export default function App() {
           if (cat) void loadCategory(cat, false);
           return;
         }
-        setContentPickerOpen(true);
-        setFocus('categories');
+        if (vodAppOpen) {
+          setContentPickerOpen(true);
+          setFocus('categories');
+        } else {
+          if (focus === 'categories') setFocus('channels');
+          else setSidebarOpen(false);
+        }
         return;
       }
 
@@ -981,7 +991,7 @@ export default function App() {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         if (focus === 'categories') {
-          if (contentPickerOpen) {
+          if (vodAppOpen && contentPickerOpen) {
             const tab = rootContentTabs[selCat];
             if (tab) void switchContentMode(String(tab.category_id) as ContentType);
             return;
@@ -992,14 +1002,14 @@ export default function App() {
         } else if (channels[selCh]) {
           const picked = channels[selCh];
           playChannel(picked);
-          if (!(contentType === 'series' && picked?.isSeries)) setSidebarOpen(false);
+          if (!(vodAppOpen && contentType === 'series' && picked?.isSeries)) setSidebarOpen(false);
         }
       }
     };
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [categories, channels, connect, contentPickerOpen, contentType, executeZap, focus, loadCategory, playChannel, playingId, rootContentTabs, selCat, selCh, settingsOpen, showToast, sidebarOpen, switchContentMode, wakeHud, zapDigits]);
+  }, [categories, channels, connect, contentPickerOpen, contentType, executeZap, focus, loadCategory, openVodApp, playChannel, playingId, rootContentTabs, selCat, selCh, settingsOpen, showToast, sidebarOpen, switchContentMode, vodAppOpen, wakeHud, zapDigits]);
 
   return (
     <>
@@ -1026,20 +1036,20 @@ export default function App() {
       <Sidebar
         open={sidebarOpen}
         focus={focus}
-        categories={contentPickerOpen ? rootContentTabs : categories}
+        categories={vodAppOpen && contentPickerOpen ? rootContentTabs : categories}
         channels={channels}
-        selectedCategory={contentPickerOpen ? rootContentTabs.findIndex((t) => String(t.category_id) === contentType) : selCat}
+        selectedCategory={vodAppOpen && contentPickerOpen ? Math.max(0, rootContentTabs.findIndex((t) => String(t.category_id) === contentType)) : selCat}
         selectedChannel={selCh}
         categoryQuery={catQuery}
         channelQuery={chQuery}
         playingId={playingId}
-        activeCategoryName={contentPickerOpen ? 'Select content type' : activeCatName}
+        activeCategoryName={vodAppOpen && contentPickerOpen ? 'Select content type' : activeCatName}
         onCategoryQuery={setCatQuery}
         onChannelQuery={setChQuery}
-        onChannelSearchSubmit={() => { if (contentType !== 'live') void submitVodSearch(chQuery, contentType); }}
+        onChannelSearchSubmit={() => { if (vodAppOpen) void submitVodSearch(chQuery, contentType); }}
         onPickCategory={async (i) => {
           setSelCat(i);
-          if (contentPickerOpen) {
+          if (vodAppOpen && contentPickerOpen) {
             const tab = rootContentTabs[i];
             if (tab) await switchContentMode(String(tab.category_id) as ContentType);
             return;
@@ -1053,7 +1063,7 @@ export default function App() {
           if (channels[i]) {
             const picked = channels[i];
             playChannel(picked);
-            if (!(contentType === 'series' && picked?.isSeries)) setSidebarOpen(false);
+            if (!(vodAppOpen && contentType === 'series' && picked?.isSeries)) setSidebarOpen(false);
           }
         }}
       />
@@ -1083,6 +1093,8 @@ export default function App() {
         onClear={() => {
           localStorage.removeItem(SAVE_KEY);
           localStorage.removeItem(LAST_KEY);
+          setVodAppOpen(false);
+          setContentPickerOpen(false);
           setMsg('Cleared');
           setMsgIsError(false);
           setSettingsProgress(0);
