@@ -113,20 +113,71 @@ export default function App() {
     setEpg(null);
   }, []);
 
+  const decodePossiblyBase64Utf8 = React.useCallback((value: any) => {
+    const raw = value == null ? '' : String(value);
+    if (!raw) return '';
+
+    const looksBase64 = /^[A-Za-z0-9+/=\r\n]+$/.test(raw) && raw.replace(/\s+/g, '').length % 4 === 0;
+    if (looksBase64) {
+      try {
+        const bin = atob(raw.replace(/\s+/g, ''));
+        const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+        return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+      } catch {
+        // fall through
+      }
+    }
+
+    // Repair common UTF-8-as-Latin1 mojibake sequences, e.g. "NjÃ«"
+    if (raw.includes('Ã') || raw.includes('Â')) {
+      try {
+        const bytes = Uint8Array.from(raw, (c) => c.charCodeAt(0) & 0xff);
+        return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+      } catch {
+        // noop
+      }
+    }
+
+    return raw;
+  }, []);
+
+  const parseEpgTs = React.useCallback((value: any) => {
+    const s = value == null ? '' : String(value).trim();
+    if (!s) return 0;
+
+    if (/^\d+$/.test(s)) {
+      const n = Number(s);
+      if (!Number.isFinite(n) || n <= 0) return 0;
+      return n > 1e12 ? Math.floor(n / 1000) : Math.floor(n);
+    }
+
+    const normalized = s.includes('T') ? s : s.replace(' ', 'T');
+    const ms = Date.parse(normalized);
+    if (!Number.isNaN(ms)) return Math.floor(ms / 1000);
+    return 0;
+  }, []);
+
   const fetchEpg = React.useCallback(async (streamId: string | number) => {
     clearEpg();
     try {
       const data: any = await jget(apiUrl({ action: 'get_short_epg', stream_id: String(streamId), limit: '2' }));
-      const list: any[] = data?.epg_listings || data?.Epg_listings || [];
+      const list: any[] = data?.epg_listings || data?.Epg_listings || data?.listings || [];
       if (!list.length) return;
-      const decode = (s: string) => {
-        try { return atob(s); } catch { return s; }
-      };
-      const entries = list.map((e: any) => ({
-        title: decode(e.title || e.name || ''),
-        start: parseInt(e.start || e.start_timestamp || 0, 10),
-        end: parseInt(e.end || e.stop_timestamp || e.end_timestamp || 0, 10),
-      }));
+
+      const entries = list
+        .map((e: any) => {
+          const start = parseEpgTs(e.start_timestamp ?? e.start ?? e.start_ts ?? e.begin ?? e.from);
+          const end = parseEpgTs(e.stop_timestamp ?? e.end_timestamp ?? e.end ?? e.stop ?? e.to);
+          return {
+            title: decodePossiblyBase64Utf8(e.title ?? e.name ?? e.programme_title ?? ''),
+            start,
+            end,
+          };
+        })
+        .filter((e: any) => e.start > 0 && e.end > e.start)
+        .sort((a: any, b: any) => a.start - b.start);
+
+      if (!entries.length) return;
 
       const paint = () => {
         const nowSec = Date.now() / 1000;
@@ -148,7 +199,7 @@ export default function App() {
     } catch {
       clearEpg();
     }
-  }, [apiUrl, clearEpg, jget]);
+  }, [apiUrl, clearEpg, decodePossiblyBase64Utf8, jget, parseEpgTs]);
 
   const stopPlayback = React.useCallback(() => {
     hlsRef.current?.destroy();
