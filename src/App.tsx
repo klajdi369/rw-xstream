@@ -46,6 +46,7 @@ export default function App() {
   const [pass, setPass] = React.useState('VFCED1');
   const [fmt, setFmt] = React.useState('m3u8');
   const [contentType, setContentType] = React.useState<ContentType>('live');
+  const [contentPickerOpen, setContentPickerOpen] = React.useState(false);
   const [remember, setRemember] = React.useState(true);
   const [useProxy, setUseProxy] = React.useState(true);
   const [msg, setMsg] = React.useState('');
@@ -84,6 +85,13 @@ export default function App() {
   const backendBaseRef = React.useRef(import.meta.env.DEV
     ? `${window.location.protocol}//${window.location.hostname}:3005`
     : window.location.origin);
+
+
+  const rootContentTabs: Category[] = React.useMemo(() => ([
+    { category_id: 'live', category_name: 'Live TV' },
+    { category_id: 'movie', category_name: 'Movies' },
+    { category_id: 'series', category_name: 'Series' },
+  ]), []);
 
   const apiUrl = React.useCallback((params: Record<string, any>) => {
     const u = new URL(`${normServer(server)}/player_api.php`);
@@ -584,28 +592,30 @@ export default function App() {
   }, [apiUrl, buildDirectUrl, channels, contentType, fetchEpg, fmt, jget, pass, playVodLike, preloadNearbyChannels, remember, server, stopPlayback, useProxy, user, wakeHud]);
 
 
-  const searchVodOrSeries = React.useCallback(async (query: string) => {
+  const searchVodOrSeries = React.useCallback(async (query: string, typeOverride?: ContentType) => {
     const q = query.trim();
-    if (!q || contentType === 'live') return null;
+    const type = typeOverride ?? contentType;
+    if (!q || type === 'live') return null;
 
-    const key = `${contentType}:${q.toLowerCase()}`;
+    const key = `${type}:${q.toLowerCase()}`;
     const cached = searchCacheRef.current.get(key);
     if (cached) return cached;
 
-    const action = contentType === 'movie' ? 'get_vod_streams' : 'get_series';
+    const action = type === 'movie' ? 'get_vod_streams' : 'get_series';
     const data: any = await jget(apiUrl({ action, search: q }));
     const list: Channel[] = (Array.isArray(data) ? data : []).map((item: any) => ({
       ...item,
       stream_id: item.stream_id ?? item.series_id,
       name: item.name || item.title || 'Untitled',
-      isSeries: contentType === 'series',
+      isSeries: type === 'series',
     }));
     list.sort((a: any, b: any) => String(a.name || '').localeCompare(String(b.name || '')));
     searchCacheRef.current.set(key, list);
     return list;
   }, [apiUrl, contentType, jget]);
 
-  const loadCategory = React.useCallback(async (cat: Category, resetSel = true) => {
+  const loadCategory = React.useCallback(async (cat: Category, resetSel = true, typeOverride?: ContentType) => {
+    const type = typeOverride ?? contentType;
     const id = String(cat.category_id);
     currentSeriesRef.current = null;
     activeCatRef.current = id;
@@ -618,12 +628,12 @@ export default function App() {
         movie: 'get_vod_streams',
         series: 'get_series',
       };
-      const data: any = await jget(apiUrl({ action: actionByType[contentType], category_id: id }));
+      const data: any = await jget(apiUrl({ action: actionByType[type], category_id: id }));
       list = (Array.isArray(data) ? data : []).map((item: any) => ({
         ...item,
         stream_id: item.stream_id ?? item.series_id,
         name: item.name || item.title || 'Untitled',
-        isSeries: contentType === 'series',
+        isSeries: type === 'series',
       }));
       list.sort((a: any, b: any) => String(a.name || '').localeCompare(String(b.name || '')));
       cacheRef.current.set(id, list);
@@ -633,24 +643,58 @@ export default function App() {
     let visible = q ? list.filter((c) => String(c.name || '').toLowerCase().includes(q)) : list;
 
     // For VOD/Series, allow global search across all categories via API.
-    if (q && contentType !== 'live') {
+    if (q && type !== 'live') {
       try {
-        const globalHits = await searchVodOrSeries(q);
+        const globalHits = await searchVodOrSeries(q, type);
         if (globalHits) visible = globalHits;
       } catch {
         // keep category-local filtering as fallback
       }
     }
 
+    if (type !== 'live' && !q) visible = [];
+
     setChannels(visible);
     if (resetSel) setSelCh(0);
 
     setHudTitle(cat.category_name || 'Channels');
-    const label = contentType === 'live' ? 'channels' : (contentType === 'movie' ? 'movies' : 'series');
-    const scope = q && contentType !== 'live' ? ' (global search)' : '';
-    setHudSub(`${visible.length} ${label}${scope}`);
+    const label = type === 'live' ? 'channels' : (type === 'movie' ? 'movies' : 'series');
+    const scope = q && type !== 'live' ? ' (global search)' : '';
+    const hint = (!q && type !== 'live') ? `Type to search ${type === 'movie' ? 'movies' : 'series'}...` : `${visible.length} ${label}${scope}`;
+    setHudSub(hint);
     wakeHud();
   }, [apiUrl, chQuery, contentType, jget, searchVodOrSeries, wakeHud]);
+
+
+  const switchContentMode = React.useCallback(async (next: ContentType) => {
+    setContentType(next);
+    setChQuery('');
+    setCatQuery('');
+    setSelCat(0);
+    setSelCh(0);
+    setContentPickerOpen(false);
+    cacheRef.current.clear();
+    searchCacheRef.current.clear();
+    seriesEpisodesRef.current.clear();
+
+    const categoryAction: Record<ContentType, string> = {
+      live: 'get_live_categories',
+      movie: 'get_vod_categories',
+      series: 'get_series_categories',
+    };
+    const raw: any = await jget(apiUrl({ action: categoryAction[next] }));
+    const all = (Array.isArray(raw) ? raw : []) as Category[];
+    all.sort((a, b) => Number(a.category_id) - Number(b.category_id));
+    const filtered = next === 'live'
+      ? all.filter((c) => String(c.category_name || '').toUpperCase().includes('ALBANIA'))
+      : all;
+
+    setAllCategories(filtered);
+    setCategories(filtered);
+    setFocus('channels');
+    if (filtered[0]) await loadCategory(filtered[0], true, next);
+    else setChannels([]);
+  }, [apiUrl, jget, loadCategory]);
 
   const connect = React.useCallback(async () => {
     if (!server || !user || !pass) {
@@ -674,15 +718,18 @@ export default function App() {
       setConnectProgress(45);
       setSettingsProgress(45);
 
+      const initialType: ContentType = 'live';
+      setContentType(initialType);
+
       const categoryAction: Record<ContentType, string> = {
         live: 'get_live_categories',
         movie: 'get_vod_categories',
         series: 'get_series_categories',
       };
-      const raw: any = await jget(apiUrl({ action: categoryAction[contentType] }));
+      const raw: any = await jget(apiUrl({ action: categoryAction[initialType] }));
       const all = (Array.isArray(raw) ? raw : []) as Category[];
       all.sort((a, b) => Number(a.category_id) - Number(b.category_id));
-      const filtered = contentType === 'live'
+      const filtered = initialType === 'live'
         ? all.filter((c) => String(c.category_name || '').toUpperCase().includes('ALBANIA'))
         : all;
 
@@ -693,19 +740,19 @@ export default function App() {
       cacheRef.current.clear();
       searchCacheRef.current.clear();
 
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ server, user, pass, fmt, contentType, rememberChannel: remember, useProxy }));
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ server, user, pass, fmt, rememberChannel: remember, useProxy }));
 
       setConnectMsg('Loading channels…');
       setConnectProgress(70);
       setSettingsProgress(70);
 
-      if (filtered[0]) await loadCategory(filtered[0], true);
+      if (filtered[0]) await loadCategory(filtered[0], true, initialType);
 
       setConnectProgress(90);
       setSettingsProgress(90);
 
       const last: LastChannel | null = JSON.parse(localStorage.getItem(LAST_KEY) || 'null');
-      if (contentType === 'live' && last && remember) {
+      if (initialType === 'live' && last && remember) {
         const cat = filtered.find((c) => String(c.category_id) === String(last.catId)) || filtered[0];
         if (cat) {
           await loadCategory(cat, false);
@@ -725,7 +772,7 @@ export default function App() {
       setConnectProgress(100);
       setSettingsProgress(100);
       setSettingsOpen(false);
-      setMsg(`Connected! ${filtered.length} ${contentType} categories.`);
+      setMsg(`Connected! ${filtered.length} live categories.`);
       setMsgIsError(false);
       setHudTitle('Ready');
       setHudSub('OK to open channel list');
@@ -740,7 +787,7 @@ export default function App() {
       setConnecting(false);
       setConnectProgress(0);
     }
-  }, [apiUrl, contentType, fmt, jget, loadCategory, pass, playChannel, remember, server, useProxy, user, wakeHud]);
+  }, [apiUrl, fmt, jget, loadCategory, pass, playChannel, remember, server, useProxy, user, wakeHud]);
 
   React.useEffect(() => {
     const saved: any = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}');
@@ -748,7 +795,6 @@ export default function App() {
     if (saved.user) setUser(saved.user);
     if (saved.pass) setPass(saved.pass);
     if (saved.fmt) setFmt(saved.fmt);
-    if (saved.contentType) setContentType(saved.contentType);
     if (saved.rememberChannel !== undefined) setRemember(saved.rememberChannel !== false);
     if (saved.useProxy !== undefined) setUseProxy(saved.useProxy !== false);
 
@@ -822,6 +868,13 @@ export default function App() {
       wakeHud();
 
       if (!sidebarOpen) {
+        if (e.key === 'Escape' || e.key === 'Backspace') {
+          e.preventDefault();
+          setSidebarOpen(true);
+          setContentPickerOpen(true);
+          setFocus('categories');
+          return;
+        }
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           // Snap selection to the currently playing channel
@@ -857,14 +910,18 @@ export default function App() {
 
       if (e.key === 'Escape' || e.key === 'Backspace') {
         e.preventDefault();
+        if (contentPickerOpen) {
+          setSidebarOpen(false);
+          return;
+        }
         if (contentType === 'series' && focus === 'channels' && currentSeriesRef.current) {
           const cat = categories[selCat];
           currentSeriesRef.current = null;
           if (cat) void loadCategory(cat, false);
           return;
         }
-        if (focus === 'categories') setFocus('channels');
-        else setSidebarOpen(false);
+        setContentPickerOpen(true);
+        setFocus('categories');
         return;
       }
 
@@ -898,6 +955,11 @@ export default function App() {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         if (focus === 'categories') {
+          if (contentPickerOpen) {
+            const tab = rootContentTabs[selCat];
+            if (tab) void switchContentMode(String(tab.category_id) as ContentType);
+            return;
+          }
           const cat = categories[selCat];
           if (cat) loadCategory(cat, true);
           setFocus('channels');
@@ -911,7 +973,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [categories, channels, connect, contentType, executeZap, focus, loadCategory, playChannel, playingId, selCat, selCh, settingsOpen, showToast, sidebarOpen, wakeHud, zapDigits]);
+  }, [categories, channels, connect, contentPickerOpen, contentType, executeZap, focus, loadCategory, playChannel, playingId, rootContentTabs, selCat, selCh, settingsOpen, showToast, sidebarOpen, switchContentMode, wakeHud, zapDigits]);
 
   return (
     <>
@@ -938,18 +1000,23 @@ export default function App() {
       <Sidebar
         open={sidebarOpen}
         focus={focus}
-        categories={categories}
+        categories={contentPickerOpen ? rootContentTabs : categories}
         channels={channels}
-        selectedCategory={selCat}
+        selectedCategory={contentPickerOpen ? rootContentTabs.findIndex((t) => String(t.category_id) === contentType) : selCat}
         selectedChannel={selCh}
         categoryQuery={catQuery}
         channelQuery={chQuery}
         playingId={playingId}
-        activeCategoryName={activeCatName}
+        activeCategoryName={contentPickerOpen ? 'Select content type' : activeCatName}
         onCategoryQuery={setCatQuery}
         onChannelQuery={setChQuery}
         onPickCategory={async (i) => {
           setSelCat(i);
+          if (contentPickerOpen) {
+            const tab = rootContentTabs[i];
+            if (tab) await switchContentMode(String(tab.category_id) as ContentType);
+            return;
+          }
           const cat = categories[i];
           if (cat) await loadCategory(cat, true);
           setFocus('channels');
@@ -972,7 +1039,6 @@ export default function App() {
         user={user}
         pass={pass}
         fmt={fmt}
-        contentType={contentType}
         remember={remember}
         useProxy={useProxy}
         message={msg}
@@ -983,7 +1049,6 @@ export default function App() {
           if (patch.user !== undefined) setUser(patch.user);
           if (patch.pass !== undefined) setPass(patch.pass);
           if (patch.fmt !== undefined) setFmt(patch.fmt);
-          if (patch.contentType !== undefined) setContentType(patch.contentType);
           if (patch.remember !== undefined) setRemember(patch.remember);
           if (patch.useProxy !== undefined) setUseProxy(patch.useProxy);
         }}
