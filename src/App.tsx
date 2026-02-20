@@ -197,8 +197,16 @@ export default function App() {
 
       stopPlayback();
       // Brief pause to let old connections drain — prevents 403 from
-      // IPTV servers that reject concurrent connections per account
-      await new Promise((r) => setTimeout(r, index === 0 ? 150 : 300));
+      // IPTV servers that reject concurrent connections per account.
+      // We wait longer specifically when switching from direct HLS to
+      // proxy requests, because providers can keep the previous HLS
+      // session alive for a short window and reject the new one.
+      const prevAttempt = index > 0 ? attempts[index - 1] : null;
+      const switchingDirectToProxy = !!(attempt.viaProxy && prevAttempt && !prevAttempt.viaProxy);
+      const waitMs = switchingDirectToProxy
+        ? 1800
+        : (index === 0 ? 150 : 300);
+      await new Promise((r) => setTimeout(r, waitMs));
       if (playToken !== playTokenRef.current) return;
 
       const directUrl = `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${attempt.sourceFormat}`;
@@ -535,6 +543,7 @@ export default function App() {
           return;
         }
         if (e.key === 'ArrowUp') {
+          e.preventDefault();
           const n = clamp(selCh - 1, 0, Math.max(0, channels.length - 1));
           setSelCh(n);
           if (channels[n]) {
@@ -544,6 +553,7 @@ export default function App() {
           return;
         }
         if (e.key === 'ArrowDown') {
+          e.preventDefault();
           const n = clamp(selCh + 1, 0, Math.max(0, channels.length - 1));
           setSelCh(n);
           if (channels[n]) {
@@ -555,15 +565,23 @@ export default function App() {
       }
 
       if (e.key === 'Escape' || e.key === 'Backspace') {
+        e.preventDefault();
         if (focus === 'categories') setFocus('channels');
         else setSidebarOpen(false);
         return;
       }
 
-      if (e.key === 'ArrowLeft' && focus === 'channels') return setFocus('categories');
-      if (e.key === 'ArrowRight' && focus === 'categories') return setFocus('channels');
+      if (e.key === 'ArrowLeft' && focus === 'channels') {
+        e.preventDefault();
+        return setFocus('categories');
+      }
+      if (e.key === 'ArrowRight' && focus === 'categories') {
+        e.preventDefault();
+        return setFocus('channels');
+      }
 
       if (e.key === 'ArrowUp') {
+        e.preventDefault();
         if (focus === 'categories') {
           const next = clamp(selCat - 1, 0, Math.max(0, categories.length - 1));
           setSelCat(next);
@@ -572,6 +590,7 @@ export default function App() {
         }
       }
       if (e.key === 'ArrowDown') {
+        e.preventDefault();
         if (focus === 'categories') {
           const next = clamp(selCat + 1, 0, Math.max(0, categories.length - 1));
           setSelCat(next);
@@ -580,6 +599,7 @@ export default function App() {
         }
       }
       if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
         if (focus === 'categories') {
           const cat = categories[selCat];
           if (cat) loadCategory(cat, true);
