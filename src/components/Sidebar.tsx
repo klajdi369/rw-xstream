@@ -15,6 +15,7 @@ type Props = {
   activeCategoryName: string;
   onCategoryQuery: (value: string) => void;
   onChannelQuery: (value: string) => void;
+  onChannelSearchSubmit?: () => void;
   onPickCategory: (index: number) => void;
   onPickChannel: (index: number) => void;
 };
@@ -23,7 +24,7 @@ export function Sidebar(props: Props) {
   const {
     open, focus, categories, channels, selectedCategory, selectedChannel,
     categoryQuery, channelQuery, playingId, activeCategoryName,
-    onCategoryQuery, onChannelQuery, onPickCategory, onPickChannel,
+    onCategoryQuery, onChannelQuery, onChannelSearchSubmit, onPickCategory, onPickChannel,
   } = props;
 
   return (
@@ -67,6 +68,9 @@ export function Sidebar(props: Props) {
             placeholder="Search channels…"
             value={channelQuery}
             onChange={(e) => onChannelQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onChannelSearchSubmit?.();
+            }}
           />
         </div>
         <VirtualList

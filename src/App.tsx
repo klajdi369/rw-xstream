@@ -614,6 +614,36 @@ export default function App() {
     return list;
   }, [apiUrl, contentType, jget]);
 
+
+  const submitVodSearch = React.useCallback(async (query: string, typeOverride?: ContentType) => {
+    const type = typeOverride ?? contentType;
+    if (type === 'live') return;
+
+    const q = query.trim();
+    if (!q) {
+      setChannels([]);
+      setHudTitle(type === 'movie' ? 'Movies' : 'Series');
+      setHudSub(`Type and submit search for ${type === 'movie' ? 'movies' : 'series'}`);
+      wakeHud();
+      return;
+    }
+
+    try {
+      const results = await searchVodOrSeries(q, type);
+      const visible = results || [];
+      setChannels(visible);
+      setSelCh(0);
+      const label = type === 'movie' ? 'movies' : 'series';
+      setHudTitle(type === 'movie' ? 'Movies' : 'Series');
+      setHudSub(`${visible.length} ${label} (global search)`);
+      wakeHud();
+    } catch {
+      setChannels([]);
+      setHudSub('Search failed');
+      wakeHud();
+    }
+  }, [contentType, searchVodOrSeries, wakeHud]);
+
   const loadCategory = React.useCallback(async (cat: Category, resetSel = true, typeOverride?: ContentType) => {
     const type = typeOverride ?? contentType;
     const id = String(cat.category_id);
@@ -640,30 +670,16 @@ export default function App() {
     }
 
     const q = chQuery.trim().toLowerCase();
-    let visible = q ? list.filter((c) => String(c.name || '').toLowerCase().includes(q)) : list;
-
-    // For VOD/Series, allow global search across all categories via API.
-    if (q && type !== 'live') {
-      try {
-        const globalHits = await searchVodOrSeries(q, type);
-        if (globalHits) visible = globalHits;
-      } catch {
-        // keep category-local filtering as fallback
-      }
-    }
-
-    if (type !== 'live' && !q) visible = [];
+    const visible = q ? list.filter((c) => String(c.name || '').toLowerCase().includes(q)) : list;
 
     setChannels(visible);
     if (resetSel) setSelCh(0);
 
     setHudTitle(cat.category_name || 'Channels');
     const label = type === 'live' ? 'channels' : (type === 'movie' ? 'movies' : 'series');
-    const scope = q && type !== 'live' ? ' (global search)' : '';
-    const hint = (!q && type !== 'live') ? `Type to search ${type === 'movie' ? 'movies' : 'series'}...` : `${visible.length} ${label}${scope}`;
-    setHudSub(hint);
+    setHudSub(`${visible.length} ${label}`);
     wakeHud();
-  }, [apiUrl, chQuery, contentType, jget, searchVodOrSeries, wakeHud]);
+  }, [apiUrl, chQuery, contentType, jget, wakeHud]);
 
 
   const switchContentMode = React.useCallback(async (next: ContentType) => {
@@ -677,6 +693,17 @@ export default function App() {
     searchCacheRef.current.clear();
     seriesEpisodesRef.current.clear();
 
+    if (next !== 'live') {
+      setAllCategories([]);
+      setCategories([]);
+      setChannels([]);
+      setFocus('channels');
+      setHudTitle(next === 'movie' ? 'Movies' : 'Series');
+      setHudSub(`Type and submit search for ${next === 'movie' ? 'movies' : 'series'}`);
+      wakeHud();
+      return;
+    }
+
     const categoryAction: Record<ContentType, string> = {
       live: 'get_live_categories',
       movie: 'get_vod_categories',
@@ -685,16 +712,14 @@ export default function App() {
     const raw: any = await jget(apiUrl({ action: categoryAction[next] }));
     const all = (Array.isArray(raw) ? raw : []) as Category[];
     all.sort((a, b) => Number(a.category_id) - Number(b.category_id));
-    const filtered = next === 'live'
-      ? all.filter((c) => String(c.category_name || '').toUpperCase().includes('ALBANIA'))
-      : all;
+    const filtered = all.filter((c) => String(c.category_name || '').toUpperCase().includes('ALBANIA'));
 
     setAllCategories(filtered);
     setCategories(filtered);
     setFocus('channels');
     if (filtered[0]) await loadCategory(filtered[0], true, next);
     else setChannels([]);
-  }, [apiUrl, jget, loadCategory]);
+  }, [apiUrl, jget, loadCategory, wakeHud]);
 
   const connect = React.useCallback(async () => {
     if (!server || !user || !pass) {
@@ -824,10 +849,11 @@ export default function App() {
   }, [allCategories, catQuery]);
 
   React.useEffect(() => {
+    if (contentType !== 'live') return;
     const cat = categories[selCat];
     if (!cat) return;
     loadCategory(cat, false);
-  }, [chQuery]);
+  }, [categories, chQuery, contentType, loadCategory, selCat]);
 
   // Number zap: type digits to jump to a channel number
   const executeZap = React.useCallback((digits: string) => {
@@ -1010,6 +1036,7 @@ export default function App() {
         activeCategoryName={contentPickerOpen ? 'Select content type' : activeCatName}
         onCategoryQuery={setCatQuery}
         onChannelQuery={setChQuery}
+        onChannelSearchSubmit={() => { if (contentType !== 'live') void submitVodSearch(chQuery, contentType); }}
         onPickCategory={async (i) => {
           setSelCat(i);
           if (contentPickerOpen) {
