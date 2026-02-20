@@ -253,8 +253,12 @@ export default function App() {
         clearBlackGuard();
 
         const startedAt = Date.now();
-        // Faster timeouts: direct 4s, proxy 7s, transcode 20s
-        const maxWaitMs = attempt.viaTranscode ? 20000 : (attempt.viaProxy ? 7000 : 4000);
+        const isDirectHls = attempt.playAs === 'm3u8' && !attempt.viaProxy && !attempt.viaTranscode;
+        // Prefer quicker fallback for direct HLS quirks, while keeping
+        // proxy/transcode windows long enough for startup.
+        const maxWaitMs = attempt.viaTranscode
+          ? 20000
+          : (attempt.viaProxy ? 7000 : (isDirectHls ? 2600 : 4000));
 
         const probe = () => {
           if (settled || playToken !== playTokenRef.current) return;
@@ -280,8 +284,8 @@ export default function App() {
           blackGuard = window.setTimeout(probe, 800);
         };
 
-        // First probe after 2.5s (was 6.5s)
-        blackGuard = window.setTimeout(probe, 2500);
+        const firstProbeMs = isDirectHls ? 1200 : 2500;
+        blackGuard = window.setTimeout(probe, firstProbeMs);
       };
 
       if (attempt.playAs === 'm3u8' && Hls.isSupported()) {
@@ -294,10 +298,32 @@ export default function App() {
           fetchEpg(ch.stream_id);
           armBlackGuard();
         });
+        let nonFatalHlsErrorScore = 0;
+        const hlsStartedAt = Date.now();
         hls.on(Hls.Events.ERROR, (_: any, d: any) => {
           if (playToken !== playTokenRef.current) return;
           console.warn('[HLS][error]', d?.type, d?.details, d?.fatal);
-          if (d?.fatal) fallback();
+          if (d?.fatal) {
+            fallback();
+            return;
+          }
+
+          const suspiciousDetails = new Set([
+            'fragParsingError',
+            'bufferAppendError',
+            'bufferAddCodecError',
+            'manifestIncompatibleCodecsError',
+            'fragDecryptError',
+          ]);
+          const isDirectHls = !attempt.viaProxy && !attempt.viaTranscode;
+          if (isDirectHls && suspiciousDetails.has(String(d?.details || ''))) {
+            nonFatalHlsErrorScore += 1;
+            const elapsedMs = Date.now() - hlsStartedAt;
+            if (nonFatalHlsErrorScore >= 2 || elapsedMs >= 2200) {
+              console.warn('[HLS] early fallback due to repeated parsing/buffer errors');
+              fallback();
+            }
+          }
         });
         hls.attachMedia(v);
         hls.loadSource(url);
