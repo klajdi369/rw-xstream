@@ -115,6 +115,11 @@ export default function App() {
     setEpg(null);
   }, []);
 
+  const stopEpgRefresh = React.useCallback(() => {
+    clearInterval(epgIntervalRef.current);
+    epgIntervalRef.current = null;
+  }, []);
+
   const decodePossiblyBase64Utf8 = React.useCallback((value: any) => {
     const raw = value == null ? '' : String(value);
     if (!raw) return '';
@@ -160,7 +165,7 @@ export default function App() {
   }, []);
 
   const fetchEpg = React.useCallback(async (streamId: string | number) => {
-    clearEpg();
+    stopEpgRefresh();
     try {
       const data: any = await jget(apiUrl({ action: 'get_short_epg', stream_id: String(streamId), limit: '2' }));
       const list: any[] = data?.epg_listings || data?.Epg_listings || data?.listings || [];
@@ -199,9 +204,10 @@ export default function App() {
       paint();
       epgIntervalRef.current = setInterval(paint, 30000);
     } catch {
-      clearEpg();
+      // Keep previous EPG visible on transient EPG fetch errors
+      stopEpgRefresh();
     }
-  }, [apiUrl, clearEpg, decodePossiblyBase64Utf8, jget, parseEpgTs]);
+  }, [apiUrl, decodePossiblyBase64Utf8, jget, parseEpgTs, stopEpgRefresh]);
 
 
   const preloadNearbyChannels = React.useCallback((list: Channel[], centerIndex: number) => {
@@ -256,18 +262,19 @@ export default function App() {
     preloadAbortRef.current.clear();
   }, []);
 
-  const stopPlayback = React.useCallback(() => {
+  const stopPlayback = React.useCallback((preserveEpg = false) => {
     hlsRef.current?.destroy();
     hlsRef.current = null;
     try { mtsRef.current?.destroy(); } catch { /* noop */ }
     mtsRef.current = null;
-    clearEpg();
+    if (preserveEpg) stopEpgRefresh();
+    else clearEpg();
     if (videoRef.current) {
       videoRef.current.pause();
       videoRef.current.removeAttribute('src');
       videoRef.current.load();
     }
-  }, [clearEpg]);
+  }, [clearEpg, stopEpgRefresh]);
 
   const playChannel = React.useCallback((ch: Channel, forceFmt?: 'm3u8' | 'ts') => {
     const v = videoRef.current;
@@ -306,7 +313,7 @@ export default function App() {
         return;
       }
 
-      stopPlayback();
+      stopPlayback(true);
       // Brief pause to let old connections drain — prevents 403 from
       // IPTV servers that reject concurrent connections per account.
       // We wait longer specifically when switching from direct HLS to
@@ -406,7 +413,6 @@ export default function App() {
           if (playToken !== playTokenRef.current) return;
           setHudSub(`▶ Live (${modeLabel})`);
           v.play().catch(() => fallback());
-          fetchEpg(ch.stream_id);
           armBlackGuard();
         });
         let nonFatalHlsErrorScore = 0;
@@ -461,7 +467,6 @@ export default function App() {
         p.load();
         v.play().catch(() => fallback());
         setHudSub(`▶ TS Live (${modeLabel})`);
-        fetchEpg(ch.stream_id);
         armBlackGuard();
         return;
       }
@@ -470,7 +475,6 @@ export default function App() {
       v.oncanplay = () => {
         if (playToken !== playTokenRef.current) return;
         setHudSub(`▶ Live (${modeLabel})`);
-        fetchEpg(ch.stream_id);
         armBlackGuard();
       };
       v.onerror = () => fallback();
