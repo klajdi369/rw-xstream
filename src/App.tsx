@@ -324,7 +324,7 @@ export default function App() {
 
     v.src = url;
     v.oncanplay = () => {
-      setHudSub(`▶ ${contentType === 'movie' ? 'Movie' : 'Episode'} Live`);
+      setHudSub(`▶ ${contentType === 'movie' ? 'Movie' : 'Episode'} • OK pause • ←/→ seek`);
       setBuffering(false);
     };
     v.onerror = () => {
@@ -913,10 +913,48 @@ export default function App() {
 
       wakeHud();
 
+      const isVodPlayback = vodAppOpen && contentType !== 'live' && !!playingId;
+
       if (!sidebarOpen) {
         if (e.key === 'Escape' || e.key === 'Backspace') {
           e.preventDefault();
+          if (isVodPlayback) {
+            setSidebarOpen(true);
+            setContentPickerOpen(false);
+            setFocus('channels');
+            return;
+          }
           openVodApp();
+          return;
+        }
+        if (isVodPlayback && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          const v = videoRef.current;
+          if (!v) return;
+          if (v.paused) {
+            void v.play();
+            setHudSub('▶ Playing • OK pause • ←/→ seek');
+          } else {
+            v.pause();
+            setHudSub('⏸ Paused • OK play • ←/→ seek');
+          }
+          return;
+        }
+        if (isVodPlayback && e.key === 'ArrowLeft') {
+          e.preventDefault();
+          const v = videoRef.current;
+          if (!v) return;
+          v.currentTime = Math.max(0, (v.currentTime || 0) - 15);
+          setHudSub('⏪ -15s');
+          return;
+        }
+        if (isVodPlayback && e.key === 'ArrowRight') {
+          e.preventDefault();
+          const v = videoRef.current;
+          if (!v) return;
+          const duration = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : Number.MAX_SAFE_INTEGER;
+          v.currentTime = Math.min(duration, (v.currentTime || 0) + 15);
+          setHudSub('⏩ +15s');
           return;
         }
         if (e.key === 'Enter' || e.key === ' ') {
