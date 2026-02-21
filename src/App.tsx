@@ -31,6 +31,7 @@ export default function App() {
   const hlsRef = React.useRef<Hls | null>(null);
   const mtsRef = React.useRef<any>(null);
   const epgIntervalRef = React.useRef<any>(null);
+  const epgRequestRef = React.useRef(0);
 
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
@@ -153,6 +154,7 @@ export default function App() {
   }, [settingsOpen, sidebarOpen]);
 
   const clearEpg = React.useCallback(() => {
+    epgRequestRef.current += 1;
     clearInterval(epgIntervalRef.current);
     epgIntervalRef.current = null;
     setEpg(null);
@@ -208,11 +210,19 @@ export default function App() {
   }, []);
 
   const fetchEpg = React.useCallback(async (streamId: string | number) => {
+    const requestId = epgRequestRef.current + 1;
+    epgRequestRef.current = requestId;
+
     stopEpgRefresh();
     try {
       const data: any = await jget(apiUrl({ action: 'get_short_epg', stream_id: String(streamId), limit: '2' }));
+      if (requestId !== epgRequestRef.current) return;
+
       const list: any[] = data?.epg_listings || data?.Epg_listings || data?.listings || [];
-      if (!list.length) return;
+      if (!list.length) {
+        setEpg(null);
+        return;
+      }
 
       const entries = list
         .map((e: any) => {
@@ -227,9 +237,13 @@ export default function App() {
         .filter((e: any) => e.start > 0 && e.end > e.start)
         .sort((a: any, b: any) => a.start - b.start);
 
-      if (!entries.length) return;
+      if (!entries.length) {
+        setEpg(null);
+        return;
+      }
 
       const paint = () => {
+        if (requestId !== epgRequestRef.current) return;
         const nowSec = Date.now() / 1000;
 
         let curIndex = entries.findIndex((e: any) => e.start <= nowSec && e.end > nowSec);
@@ -245,6 +259,8 @@ export default function App() {
         const dur = Math.max(1, cur.end - cur.start);
         const progress = Math.min(100, Math.max(0, Math.round(((nowSec - cur.start) / dur) * 100)));
 
+        if (requestId !== epgRequestRef.current) return;
+
         setEpg({
           nowTitle: cur.title,
           nowTime: `${fmtTime(cur.start)} – ${fmtTime(cur.end)}`,
@@ -252,7 +268,7 @@ export default function App() {
           next: next ? `Next  ${fmtTime(next.start)}  ${next.title}` : '',
         });
 
-        if (!next && nowSec >= cur.end - 10) {
+        if (!next && nowSec >= cur.end - 10 && requestId === epgRequestRef.current) {
           void fetchEpg(streamId);
         }
       };
@@ -260,8 +276,9 @@ export default function App() {
       paint();
       epgIntervalRef.current = setInterval(paint, 30000);
     } catch {
-      // Keep previous EPG visible on transient EPG fetch errors
+      if (requestId !== epgRequestRef.current) return;
       stopEpgRefresh();
+      setEpg(null);
     }
   }, [apiUrl, decodePossiblyBase64Utf8, jget, parseEpgTs, stopEpgRefresh]);
 
