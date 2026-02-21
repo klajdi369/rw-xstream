@@ -8,6 +8,8 @@ import { Category, Channel, LastChannel } from './types/player';
 
 const SAVE_KEY = 'xtream_tv_v4';
 const LAST_KEY = 'xtream_last_ch';
+const CHANNEL_PROXY_MEMORY_KEY = 'xtream_channel_proxy_memory_v1';
+const CHANNEL_PROXY_MAX_VISITS = 6;
 
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 
@@ -47,6 +49,7 @@ export default function App() {
   const [fmt, setFmt] = React.useState('m3u8');
   const [remember, setRemember] = React.useState(true);
   const [useProxy, setUseProxy] = React.useState(true);
+  const [rememberProxyMode, setRememberProxyMode] = React.useState(true);
   const [msg, setMsg] = React.useState('');
   const [msgIsError, setMsgIsError] = React.useState(false);
   const [settingsProgress, setSettingsProgress] = React.useState(0);
@@ -99,6 +102,19 @@ export default function App() {
     setChannelToast(text);
     clearTimeout(toastTimerRef.current);
     toastTimerRef.current = setTimeout(() => setChannelToast(''), 2500);
+  }, []);
+
+  const readChannelProxyMemory = React.useCallback(() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(CHANNEL_PROXY_MEMORY_KEY) || '{}');
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }, []);
+
+  const writeChannelProxyMemory = React.useCallback((next: Record<string, { useProxy: boolean; visits: number }>) => {
+    localStorage.setItem(CHANNEL_PROXY_MEMORY_KEY, JSON.stringify(next));
   }, []);
 
   const wakeHud = React.useCallback(() => {
@@ -293,7 +309,44 @@ export default function App() {
         { sourceFormat: 'm3u8' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: true },
       ];
 
-    const attempts = useProxy ? attemptOrder : attemptOrder.filter((a) => !a.viaProxy && !a.viaTranscode);
+    const channelId = String(ch.stream_id);
+    const rememberedMode = rememberProxyMode ? readChannelProxyMemory()[channelId] : null;
+    const rememberedUseProxy = rememberedMode && rememberedMode.visits <= CHANNEL_PROXY_MAX_VISITS
+      ? rememberedMode.useProxy
+      : null;
+
+    const reorderAttempts = (list: typeof attemptOrder) => {
+      if (rememberedUseProxy === null) return list;
+      const preferred = list.filter((a) => (a.viaProxy || a.viaTranscode) === rememberedUseProxy);
+      const fallback = list.filter((a) => (a.viaProxy || a.viaTranscode) !== rememberedUseProxy);
+      return [...preferred, ...fallback];
+    };
+
+    const attempts = useProxy
+      ? reorderAttempts(attemptOrder)
+      : attemptOrder.filter((a) => !a.viaProxy && !a.viaTranscode);
+
+    const rememberChannelPlaybackMode = (loadedThroughProxy: boolean) => {
+      if (!rememberProxyMode) return;
+      const memory = readChannelProxyMemory();
+      const prevVisits = Number(memory[channelId]?.visits || 0);
+      const visits = prevVisits + 1;
+      if (visits > CHANNEL_PROXY_MAX_VISITS) {
+        delete memory[channelId];
+      } else {
+        memory[channelId] = { useProxy: loadedThroughProxy, visits };
+      }
+      writeChannelProxyMemory(memory);
+    };
+
+    const resetRememberedPlaybackMode = () => {
+      if (!rememberProxyMode) return;
+      const memory = readChannelProxyMemory();
+      if (memory[channelId]) {
+        delete memory[channelId];
+        writeChannelProxyMemory(memory);
+      }
+    };
 
     setPlayingId(String(ch.stream_id));
     setBuffering(true);
@@ -360,6 +413,7 @@ export default function App() {
           wakeHud();
           setTimeout(() => { void startAttempt(index + 1); }, 200);
         } else {
+          resetRememberedPlaybackMode();
           setHudSub('Cannot play this stream');
           setBuffering(false);
           wakeHud();
@@ -390,6 +444,7 @@ export default function App() {
           if (frames > 0 || progressed || hasAudioBytes) {
             settled = true;
             clearBlackGuard();
+            rememberChannelPlaybackMode(attempt.viaProxy || attempt.viaTranscode);
             setBuffering(false);
             return;
           }
@@ -487,7 +542,7 @@ export default function App() {
       const last: LastChannel = { streamId: String(ch.stream_id), name: ch.name, catId: activeCatRef.current };
       localStorage.setItem(LAST_KEY, JSON.stringify(last));
     }
-  }, [channels, fetchEpg, fmt, pass, preloadNearbyChannels, remember, server, stopPlayback, useProxy, user, wakeHud]);
+  }, [channels, fetchEpg, fmt, pass, preloadNearbyChannels, readChannelProxyMemory, remember, rememberProxyMode, server, stopPlayback, useProxy, user, wakeHud, writeChannelProxyMemory]);
 
   const loadCategory = React.useCallback(async (cat: Category, resetSel = true) => {
     const id = String(cat.category_id);
@@ -545,7 +600,15 @@ export default function App() {
       setChQuery('');
       cacheRef.current.clear();
 
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ server, user, pass, fmt, rememberChannel: remember, useProxy }));
+      localStorage.setItem(SAVE_KEY, JSON.stringify({
+        server,
+        user,
+        pass,
+        fmt,
+        rememberChannel: remember,
+        useProxy,
+        rememberProxyMode,
+      }));
 
       setConnectMsg('Loading channels…');
       setConnectProgress(70);
@@ -592,7 +655,7 @@ export default function App() {
       setConnecting(false);
       setConnectProgress(0);
     }
-  }, [apiUrl, fmt, jget, loadCategory, pass, playChannel, remember, server, useProxy, user, wakeHud]);
+  }, [apiUrl, fmt, jget, loadCategory, pass, playChannel, remember, rememberProxyMode, server, useProxy, user, wakeHud]);
 
   React.useEffect(() => {
     const saved: any = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}');
@@ -602,6 +665,7 @@ export default function App() {
     if (saved.fmt) setFmt(saved.fmt);
     if (saved.rememberChannel !== undefined) setRemember(saved.rememberChannel !== false);
     if (saved.useProxy !== undefined) setUseProxy(saved.useProxy !== false);
+    if (saved.rememberProxyMode !== undefined) setRememberProxyMode(saved.rememberProxyMode !== false);
 
     if (saved.server && saved.user && saved.pass) setTimeout(() => connect(), 30);
     else setSettingsOpen(true);
@@ -664,7 +728,7 @@ export default function App() {
         zapTimerRef.current = setTimeout(() => {
           executeZap(newDigits);
           setZapDigits('');
-        }, 1200);
+        }, 3000);
         wakeHud();
         return;
       }
@@ -816,6 +880,7 @@ export default function App() {
         fmt={fmt}
         remember={remember}
         useProxy={useProxy}
+        rememberProxyMode={rememberProxyMode}
         message={msg}
         isError={msgIsError}
         progress={settingsProgress}
@@ -826,6 +891,7 @@ export default function App() {
           if (patch.fmt !== undefined) setFmt(patch.fmt);
           if (patch.remember !== undefined) setRemember(patch.remember);
           if (patch.useProxy !== undefined) setUseProxy(patch.useProxy);
+          if (patch.rememberProxyMode !== undefined) setRememberProxyMode(patch.rememberProxyMode);
         }}
         onConnect={connect}
         onClear={() => {
