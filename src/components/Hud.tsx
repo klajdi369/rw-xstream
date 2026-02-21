@@ -5,6 +5,7 @@ type Props = {
   subtitle: string;
   hidden: boolean;
   onOpenSettings: () => void;
+  keyIndicator?: string;
   epg?: {
     nowTitle: string;
     nowTime: string;
@@ -13,7 +14,7 @@ type Props = {
   } | null;
 };
 
-export function Hud({ title, subtitle, hidden, onOpenSettings, epg }: Props) {
+export function Hud({ title, subtitle, hidden, onOpenSettings, keyIndicator, epg }: Props) {
   return (
     <div id="hud" className={hidden ? 'hide' : ''}>
       <div className="hudInfo">
@@ -28,6 +29,7 @@ export function Hud({ title, subtitle, hidden, onOpenSettings, epg }: Props) {
           <div className="epgNext">{epg?.next ?? ''}</div>
         </div>
       </div>
+      <div id="keyIndicator" className={keyIndicator ? 'show' : ''}>{keyIndicator || ''}</div>
       <div className="hudHint">
         <kbd>OK</kbd> open list<br />
         <kbd>&#x2191;</kbd> <kbd>&#x2193;</kbd> prev / next<br />

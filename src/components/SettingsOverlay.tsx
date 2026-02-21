@@ -8,6 +8,7 @@ type Props = {
   fmt: string;
   remember: boolean;
   useProxy: boolean;
+  rememberProxyMode: boolean;
   message: string;
   isError?: boolean;
   progress?: number;
@@ -17,7 +18,7 @@ type Props = {
 };
 
 export function SettingsOverlay(props: Props) {
-  const { open, server, user, pass, fmt, remember, useProxy, message, isError, progress, onChange, onConnect, onClear } = props;
+  const { open, server, user, pass, fmt, remember, useProxy, rememberProxyMode, message, isError, progress, onChange, onConnect, onClear } = props;
 
   return (
     <div id="settingsOverlay" className={open ? 'show' : ''}>
@@ -50,6 +51,17 @@ export function SettingsOverlay(props: Props) {
           </div>
           <label className="toggle">
             <input type="checkbox" checked={useProxy} onChange={(e) => onChange({ useProxy: e.target.checked })} />
+            <span className="toggleSlider" />
+          </label>
+        </div>
+
+        <div className="toggleRow">
+          <div>
+            <div className="tLabel">Remember proxy mode per channel</div>
+            <div className="tDesc">Reset after 6 successful loads or on complete playback failure</div>
+          </div>
+          <label className="toggle">
+            <input type="checkbox" checked={rememberProxyMode} onChange={(e) => onChange({ rememberProxyMode: e.target.checked })} />
             <span className="toggleSlider" />
           </label>
         </div>
