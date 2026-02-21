@@ -4,10 +4,14 @@ import mpegts from 'mpegts.js';
 import { Hud } from './components/Hud';
 import { SettingsOverlay } from './components/SettingsOverlay';
 import { Sidebar } from './components/Sidebar';
+import { EpgGuideOverlay, GuideRow } from './components/EpgGuideOverlay';
 import { Category, Channel, LastChannel } from './types/player';
 
 const SAVE_KEY = 'xtream_tv_v4';
 const LAST_KEY = 'xtream_last_ch';
+const CHANNEL_PROXY_MEMORY_KEY = 'xtream_channel_proxy_memory_v1';
+const CHANNEL_PROXY_MAX_VISITS = 6;
+const CHANNEL_ROW_JUMP = 8;
 
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 
@@ -28,6 +32,8 @@ export default function App() {
   const hlsRef = React.useRef<Hls | null>(null);
   const mtsRef = React.useRef<any>(null);
   const epgIntervalRef = React.useRef<any>(null);
+  const epgRequestRef = React.useRef(0);
+  const guideRequestRef = React.useRef(0);
 
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
@@ -47,6 +53,7 @@ export default function App() {
   const [fmt, setFmt] = React.useState('m3u8');
   const [remember, setRemember] = React.useState(true);
   const [useProxy, setUseProxy] = React.useState(true);
+  const [rememberProxyMode, setRememberProxyMode] = React.useState(true);
   const [msg, setMsg] = React.useState('');
   const [msgIsError, setMsgIsError] = React.useState(false);
   const [settingsProgress, setSettingsProgress] = React.useState(0);
@@ -62,6 +69,12 @@ export default function App() {
   const [buffering, setBuffering] = React.useState(false);
   const [activeCatName, setActiveCatName] = React.useState('Channels');
   const [epg, setEpg] = React.useState<{ nowTitle: string; nowTime: string; progress: number; next: string } | null>(null);
+  const [epgGuideOpen, setEpgGuideOpen] = React.useState(false);
+  const [epgGuideLoading, setEpgGuideLoading] = React.useState(false);
+  const [epgGuideRows, setEpgGuideRows] = React.useState<GuideRow[]>([]);
+  const [epgGuideSelRow, setEpgGuideSelRow] = React.useState(0);
+  const [epgGuideSelSlot, setEpgGuideSelSlot] = React.useState(1);
+  const [epgGuideStartTs, setEpgGuideStartTs] = React.useState(0);
 
   // Channel toast (shows channel name on zap)
   const [channelToast, setChannelToast] = React.useState('');
@@ -70,6 +83,8 @@ export default function App() {
   // Number zap (type channel number on remote)
   const [zapDigits, setZapDigits] = React.useState('');
   const zapTimerRef = React.useRef<any>(null);
+  const [keyIndicator, setKeyIndicator] = React.useState('');
+  const keyIndicatorTimerRef = React.useRef<any>(null);
 
   const cacheRef = React.useRef<Map<string, Channel[]>>(new Map());
   const activeCatRef = React.useRef<string>('');
@@ -101,6 +116,43 @@ export default function App() {
     toastTimerRef.current = setTimeout(() => setChannelToast(''), 2500);
   }, []);
 
+  const readChannelProxyMemory = React.useCallback(() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(CHANNEL_PROXY_MEMORY_KEY) || '{}');
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }, []);
+
+  const writeChannelProxyMemory = React.useCallback((next: Record<string, { useProxy: boolean; visits: number }>) => {
+    localStorage.setItem(CHANNEL_PROXY_MEMORY_KEY, JSON.stringify(next));
+  }, []);
+
+  const showKeyIndicator = React.useCallback((key: string) => {
+    const labels: Record<string, string> = {
+      ArrowUp: '↑',
+      ArrowDown: '↓',
+      ArrowLeft: '←',
+      ArrowRight: '→',
+      Enter: 'OK',
+      Escape: 'ESC',
+      Backspace: 'BACK',
+      ' ': 'SPACE',
+      PageUp: 'CH+',
+      PageDown: 'CH-',
+      ChannelUp: 'CH+',
+      ChannelDown: 'CH-',
+      MediaTrackPrevious: 'CH+',
+      MediaTrackNext: 'CH-',
+    };
+    const normalized = key === 'Spacebar' ? ' ' : key;
+    const display = labels[normalized] || normalized;
+    setKeyIndicator(display);
+    clearTimeout(keyIndicatorTimerRef.current);
+    keyIndicatorTimerRef.current = setTimeout(() => setKeyIndicator(''), 900);
+  }, []);
+
   const wakeHud = React.useCallback(() => {
     setHudHidden(false);
     clearTimeout(hudTimerRef.current);
@@ -110,6 +162,7 @@ export default function App() {
   }, [settingsOpen, sidebarOpen]);
 
   const clearEpg = React.useCallback(() => {
+    epgRequestRef.current += 1;
     clearInterval(epgIntervalRef.current);
     epgIntervalRef.current = null;
     setEpg(null);
@@ -165,11 +218,19 @@ export default function App() {
   }, []);
 
   const fetchEpg = React.useCallback(async (streamId: string | number) => {
+    const requestId = epgRequestRef.current + 1;
+    epgRequestRef.current = requestId;
+
     stopEpgRefresh();
     try {
       const data: any = await jget(apiUrl({ action: 'get_short_epg', stream_id: String(streamId), limit: '2' }));
+      if (requestId !== epgRequestRef.current) return;
+
       const list: any[] = data?.epg_listings || data?.Epg_listings || data?.listings || [];
-      if (!list.length) return;
+      if (!list.length) {
+        setEpg(null);
+        return;
+      }
 
       const entries = list
         .map((e: any) => {
@@ -184,30 +245,121 @@ export default function App() {
         .filter((e: any) => e.start > 0 && e.end > e.start)
         .sort((a: any, b: any) => a.start - b.start);
 
-      if (!entries.length) return;
+      if (!entries.length) {
+        setEpg(null);
+        return;
+      }
 
       const paint = () => {
+        if (requestId !== epgRequestRef.current) return;
         const nowSec = Date.now() / 1000;
-        let cur = entries.find((e: any) => e.start <= nowSec && e.end > nowSec) || entries[0];
+
+        let curIndex = entries.findIndex((e: any) => e.start <= nowSec && e.end > nowSec);
+        if (curIndex < 0) {
+          const firstFutureIndex = entries.findIndex((e: any) => e.start > nowSec);
+          curIndex = firstFutureIndex > 0 ? firstFutureIndex - 1 : entries.length - 1;
+        }
+
+        const cur = entries[curIndex];
         if (!cur) return;
-        const next = entries.find((e: any) => e.start >= cur.end) || null;
+
+        const next = entries[curIndex + 1] || null;
         const dur = Math.max(1, cur.end - cur.start);
         const progress = Math.min(100, Math.max(0, Math.round(((nowSec - cur.start) / dur) * 100)));
+
+        if (requestId !== epgRequestRef.current) return;
+
         setEpg({
           nowTitle: cur.title,
           nowTime: `${fmtTime(cur.start)} – ${fmtTime(cur.end)}`,
           progress,
           next: next ? `Next  ${fmtTime(next.start)}  ${next.title}` : '',
         });
+
+        if (!next && nowSec >= cur.end - 10 && requestId === epgRequestRef.current) {
+          void fetchEpg(streamId);
+        }
       };
 
       paint();
       epgIntervalRef.current = setInterval(paint, 30000);
     } catch {
-      // Keep previous EPG visible on transient EPG fetch errors
+      if (requestId !== epgRequestRef.current) return;
       stopEpgRefresh();
+      setEpg(null);
     }
   }, [apiUrl, decodePossiblyBase64Utf8, jget, parseEpgTs, stopEpgRefresh]);
+
+  const epgGuideSlots = React.useMemo(() => {
+    const base = epgGuideStartTs || (Math.floor(Date.now() / 1000 / 1800) * 1800);
+    return Array.from({ length: 8 }, (_, i) => base + (i * 1800));
+  }, [epgGuideStartTs]);
+
+  const openEpgGuide = React.useCallback(() => {
+    const base = Math.floor(Date.now() / 1000 / 1800) * 1800;
+    setEpgGuideStartTs(base);
+    setEpgGuideSelSlot(1);
+    setEpgGuideSelRow(selCh);
+    setSidebarOpen(false);
+    setEpgGuideOpen(true);
+  }, [selCh]);
+
+  const loadEpgGuide = React.useCallback(async () => {
+    if (!channels.length) {
+      setEpgGuideRows([]);
+      setEpgGuideLoading(false);
+      return;
+    }
+
+    const requestId = guideRequestRef.current + 1;
+    guideRequestRef.current = requestId;
+    setEpgGuideLoading(true);
+
+    const windowStart = epgGuideSlots[0] || Math.floor(Date.now() / 1000 / 1800) * 1800;
+    const windowEnd = (epgGuideSlots[epgGuideSlots.length - 1] || windowStart) + 1800;
+
+    const from = clamp(selCh - 10, 0, Math.max(0, channels.length - 1));
+    const to = clamp(from + 40, 0, channels.length);
+    const scoped = channels.slice(from, to);
+
+    const rows = await Promise.all(scoped.map(async (ch) => {
+      try {
+        const data: any = await jget(apiUrl({ action: 'get_short_epg', stream_id: String(ch.stream_id), limit: '12' }));
+        const list: any[] = data?.epg_listings || data?.Epg_listings || data?.listings || [];
+        const programs = list
+          .map((e: any) => ({
+            title: decodePossiblyBase64Utf8(e.title ?? e.name ?? e.programme_title ?? ''),
+            start: parseEpgTs(e.start_timestamp ?? e.start ?? e.start_ts ?? e.begin ?? e.from),
+            end: parseEpgTs(e.stop_timestamp ?? e.end_timestamp ?? e.end ?? e.stop ?? e.to),
+          }))
+          .filter((e: any) => e.start > 0 && e.end > e.start && e.end >= windowStart && e.start <= windowEnd)
+          .sort((a: any, b: any) => a.start - b.start);
+
+        return {
+          streamId: String(ch.stream_id),
+          name: ch.name || 'Channel',
+          programs,
+        };
+      } catch {
+        return {
+          streamId: String(ch.stream_id),
+          name: ch.name || 'Channel',
+          programs: [],
+        };
+      }
+    }));
+
+    if (requestId !== guideRequestRef.current) return;
+    setEpgGuideRows(rows);
+    setEpgGuideLoading(false);
+    setEpgGuideSelRow(clamp(selCh - from, 0, Math.max(0, rows.length - 1)));
+  }, [apiUrl, channels, decodePossiblyBase64Utf8, epgGuideSlots, jget, parseEpgTs, selCh]);
+
+  React.useEffect(() => {
+    if (!epgGuideOpen) return;
+    void loadEpgGuide();
+  }, [epgGuideOpen, loadEpgGuide]);
+
 
 
   const preloadNearbyChannels = React.useCallback((list: Channel[], centerIndex: number) => {
@@ -293,7 +445,44 @@ export default function App() {
         { sourceFormat: 'm3u8' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: true },
       ];
 
-    const attempts = useProxy ? attemptOrder : attemptOrder.filter((a) => !a.viaProxy && !a.viaTranscode);
+    const channelId = String(ch.stream_id);
+    const rememberedMode = rememberProxyMode ? readChannelProxyMemory()[channelId] : null;
+    const rememberedUseProxy = rememberedMode && rememberedMode.visits <= CHANNEL_PROXY_MAX_VISITS
+      ? rememberedMode.useProxy
+      : null;
+
+    const reorderAttempts = (list: typeof attemptOrder) => {
+      if (rememberedUseProxy === null) return list;
+      const preferred = list.filter((a) => (a.viaProxy || a.viaTranscode) === rememberedUseProxy);
+      const fallback = list.filter((a) => (a.viaProxy || a.viaTranscode) !== rememberedUseProxy);
+      return [...preferred, ...fallback];
+    };
+
+    const attempts = useProxy
+      ? reorderAttempts(attemptOrder)
+      : attemptOrder.filter((a) => !a.viaProxy && !a.viaTranscode);
+
+    const rememberChannelPlaybackMode = (loadedThroughProxy: boolean) => {
+      if (!rememberProxyMode) return;
+      const memory = readChannelProxyMemory();
+      const prevVisits = Number(memory[channelId]?.visits || 0);
+      const visits = prevVisits + 1;
+      if (visits > CHANNEL_PROXY_MAX_VISITS) {
+        delete memory[channelId];
+      } else {
+        memory[channelId] = { useProxy: loadedThroughProxy, visits };
+      }
+      writeChannelProxyMemory(memory);
+    };
+
+    const resetRememberedPlaybackMode = () => {
+      if (!rememberProxyMode) return;
+      const memory = readChannelProxyMemory();
+      if (memory[channelId]) {
+        delete memory[channelId];
+        writeChannelProxyMemory(memory);
+      }
+    };
 
     setPlayingId(String(ch.stream_id));
     setBuffering(true);
@@ -360,6 +549,7 @@ export default function App() {
           wakeHud();
           setTimeout(() => { void startAttempt(index + 1); }, 200);
         } else {
+          resetRememberedPlaybackMode();
           setHudSub('Cannot play this stream');
           setBuffering(false);
           wakeHud();
@@ -390,6 +580,7 @@ export default function App() {
           if (frames > 0 || progressed || hasAudioBytes) {
             settled = true;
             clearBlackGuard();
+            rememberChannelPlaybackMode(attempt.viaProxy || attempt.viaTranscode);
             setBuffering(false);
             return;
           }
@@ -487,7 +678,7 @@ export default function App() {
       const last: LastChannel = { streamId: String(ch.stream_id), name: ch.name, catId: activeCatRef.current };
       localStorage.setItem(LAST_KEY, JSON.stringify(last));
     }
-  }, [channels, fetchEpg, fmt, pass, preloadNearbyChannels, remember, server, stopPlayback, useProxy, user, wakeHud]);
+  }, [channels, fetchEpg, fmt, pass, preloadNearbyChannels, readChannelProxyMemory, remember, rememberProxyMode, server, stopPlayback, useProxy, user, wakeHud, writeChannelProxyMemory]);
 
   const loadCategory = React.useCallback(async (cat: Category, resetSel = true) => {
     const id = String(cat.category_id);
@@ -545,7 +736,15 @@ export default function App() {
       setChQuery('');
       cacheRef.current.clear();
 
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ server, user, pass, fmt, rememberChannel: remember, useProxy }));
+      localStorage.setItem(SAVE_KEY, JSON.stringify({
+        server,
+        user,
+        pass,
+        fmt,
+        rememberChannel: remember,
+        useProxy,
+        rememberProxyMode,
+      }));
 
       setConnectMsg('Loading channels…');
       setConnectProgress(70);
@@ -592,7 +791,7 @@ export default function App() {
       setConnecting(false);
       setConnectProgress(0);
     }
-  }, [apiUrl, fmt, jget, loadCategory, pass, playChannel, remember, server, useProxy, user, wakeHud]);
+  }, [apiUrl, fmt, jget, loadCategory, pass, playChannel, remember, rememberProxyMode, server, useProxy, user, wakeHud]);
 
   React.useEffect(() => {
     const saved: any = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}');
@@ -602,6 +801,7 @@ export default function App() {
     if (saved.fmt) setFmt(saved.fmt);
     if (saved.rememberChannel !== undefined) setRemember(saved.rememberChannel !== false);
     if (saved.useProxy !== undefined) setUseProxy(saved.useProxy !== false);
+    if (saved.rememberProxyMode !== undefined) setRememberProxyMode(saved.rememberProxyMode !== false);
 
     if (saved.server && saved.user && saved.pass) setTimeout(() => connect(), 30);
     else setSettingsOpen(true);
@@ -609,6 +809,7 @@ export default function App() {
     return () => {
       stopPlayback();
       clearTimeout(hudTimerRef.current);
+      clearTimeout(keyIndicatorTimerRef.current);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -647,11 +848,94 @@ export default function App() {
     }
   }, [channels, playChannel, showToast]);
 
+  const moveByChannelRow = React.useCallback((dir: 1 | -1) => {
+    const step = CHANNEL_ROW_JUMP * dir;
+    const n = clamp(selCh + step, 0, Math.max(0, channels.length - 1));
+    setSelCh(n);
+    if (channels[n]) {
+      playChannel(channels[n]);
+      showToast(channels[n].name || 'Channel');
+    }
+  }, [channels, playChannel, selCh, showToast]);
+
+  const isGuideOpenKey = React.useCallback((e: KeyboardEvent) => {
+    const k = String(e.key || '').toLowerCase();
+    const c = String(e.code || '').toLowerCase();
+    const keyCode = (e as any).keyCode;
+    const which = (e as any).which;
+
+    return (
+      k === 'g'
+      || k === 'guide'
+      || k === 'epg'
+      || c === 'guide'
+      || c === 'keyg'
+      || keyCode === 458
+      || which === 458
+    );
+  }, []);
+
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      showKeyIndicator(e.key);
       if (settingsOpen) {
         if (e.key === 'Escape' || e.key === 'Backspace') setSettingsOpen(false);
         if (e.key === 'Enter') connect();
+        return;
+      }
+
+      if (epgGuideOpen) {
+        if (e.key === 'Escape' || e.key === 'Backspace' || isGuideOpenKey(e)) {
+          e.preventDefault();
+          setEpgGuideOpen(false);
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setEpgGuideSelRow((v) => clamp(v - 1, 0, Math.max(0, epgGuideRows.length - 1)));
+          return;
+        }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setEpgGuideSelRow((v) => clamp(v + 1, 0, Math.max(0, epgGuideRows.length - 1)));
+          return;
+        }
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          if (epgGuideSelSlot <= 0) {
+            setEpgGuideStartTs((v) => v - 1800);
+          } else {
+            setEpgGuideSelSlot((v) => clamp(v - 1, 0, 7));
+          }
+          return;
+        }
+        if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          if (epgGuideSelSlot >= 7) {
+            setEpgGuideStartTs((v) => v + 1800);
+          } else {
+            setEpgGuideSelSlot((v) => clamp(v + 1, 0, 7));
+          }
+          return;
+        }
+        if ((e.key === 'Enter' || e.key === ' ') && epgGuideRows[epgGuideSelRow]) {
+          e.preventDefault();
+          const streamId = epgGuideRows[epgGuideSelRow].streamId;
+          const idx = channels.findIndex((c) => String(c.stream_id) === streamId);
+          if (idx >= 0 && channels[idx]) {
+            setSelCh(idx);
+            playChannel(channels[idx]);
+            showToast(channels[idx].name || 'Channel');
+            setEpgGuideOpen(false);
+          }
+          return;
+        }
+        return;
+      }
+
+      if (isGuideOpenKey(e)) {
+        e.preventDefault();
+        openEpgGuide();
         return;
       }
 
@@ -664,7 +948,7 @@ export default function App() {
         zapTimerRef.current = setTimeout(() => {
           executeZap(newDigits);
           setZapDigits('');
-        }, 1200);
+        }, 3000);
         wakeHud();
         return;
       }
@@ -672,6 +956,16 @@ export default function App() {
       wakeHud();
 
       if (!sidebarOpen) {
+        if (['PageUp', 'ChannelUp', 'MediaTrackPrevious'].includes(e.key)) {
+          e.preventDefault();
+          moveByChannelRow(-1);
+          return;
+        }
+        if (['PageDown', 'ChannelDown', 'MediaTrackNext'].includes(e.key)) {
+          e.preventDefault();
+          moveByChannelRow(1);
+          return;
+        }
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           // Snap selection to the currently playing channel
@@ -721,6 +1015,23 @@ export default function App() {
         return setFocus('channels');
       }
 
+      if (['PageUp', 'ChannelUp', 'MediaTrackPrevious'].includes(e.key)) {
+        e.preventDefault();
+        if (focus === 'categories') {
+          setSelCat((v) => clamp(v - CHANNEL_ROW_JUMP, 0, Math.max(0, categories.length - 1)));
+        } else {
+          setSelCh((v) => clamp(v - CHANNEL_ROW_JUMP, 0, Math.max(0, channels.length - 1)));
+        }
+      }
+      if (['PageDown', 'ChannelDown', 'MediaTrackNext'].includes(e.key)) {
+        e.preventDefault();
+        if (focus === 'categories') {
+          setSelCat((v) => clamp(v + CHANNEL_ROW_JUMP, 0, Math.max(0, categories.length - 1)));
+        } else {
+          setSelCh((v) => clamp(v + CHANNEL_ROW_JUMP, 0, Math.max(0, channels.length - 1)));
+        }
+      }
+
       if (e.key === 'ArrowUp') {
         e.preventDefault();
         if (focus === 'categories') {
@@ -754,7 +1065,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [categories, channels, connect, executeZap, focus, loadCategory, playChannel, playingId, selCat, selCh, settingsOpen, showToast, sidebarOpen, wakeHud, zapDigits]);
+  }, [categories, channels, connect, epgGuideOpen, epgGuideRows, epgGuideSelRow, epgGuideSelSlot, executeZap, focus, isGuideOpenKey, loadCategory, moveByChannelRow, openEpgGuide, playChannel, playingId, selCat, selCh, settingsOpen, showKeyIndicator, showToast, sidebarOpen, wakeHud, zapDigits]);
 
   return (
     <>
@@ -776,7 +1087,18 @@ export default function App() {
         <div className="zapSub">channel</div>
       </div>
 
-      <div id="backdrop" className={sidebarOpen ? 'open' : ''} onClick={() => setSidebarOpen(false)} />
+      <div id="backdrop" className={(sidebarOpen || epgGuideOpen) ? 'open' : ''} onClick={() => { setSidebarOpen(false); setEpgGuideOpen(false); }} />
+
+
+      <EpgGuideOverlay
+        open={epgGuideOpen}
+        loading={epgGuideLoading}
+        rows={epgGuideRows}
+        slots={epgGuideSlots}
+        selectedRow={epgGuideSelRow}
+        selectedSlot={epgGuideSelSlot}
+        onClose={() => setEpgGuideOpen(false)}
+      />
 
       <Sidebar
         open={sidebarOpen}
@@ -806,7 +1128,7 @@ export default function App() {
         }}
       />
 
-      <Hud title={hudTitle} subtitle={hudSub} hidden={hudHidden || settingsOpen} onOpenSettings={() => setSettingsOpen(true)} epg={epg} />
+      <Hud title={hudTitle} subtitle={hudSub} hidden={hudHidden || settingsOpen || epgGuideOpen} onOpenSettings={() => setSettingsOpen(true)} keyIndicator={keyIndicator} epg={epg} />
 
       <SettingsOverlay
         open={settingsOpen}
@@ -816,6 +1138,7 @@ export default function App() {
         fmt={fmt}
         remember={remember}
         useProxy={useProxy}
+        rememberProxyMode={rememberProxyMode}
         message={msg}
         isError={msgIsError}
         progress={settingsProgress}
@@ -826,6 +1149,7 @@ export default function App() {
           if (patch.fmt !== undefined) setFmt(patch.fmt);
           if (patch.remember !== undefined) setRemember(patch.remember);
           if (patch.useProxy !== undefined) setUseProxy(patch.useProxy);
+          if (patch.rememberProxyMode !== undefined) setRememberProxyMode(patch.rememberProxyMode);
         }}
         onConnect={connect}
         onClear={() => {
