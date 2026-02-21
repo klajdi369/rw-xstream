@@ -41,6 +41,33 @@ function parseTs(value: any) {
   return Number.isNaN(ms) ? 0 : Math.floor(ms / 1000);
 }
 
+function decodePossiblyBase64Utf8(value: any) {
+  const raw = value == null ? '' : String(value);
+  if (!raw) return '';
+
+  const looksBase64 = /^[A-Za-z0-9+/=\r\n]+$/.test(raw) && raw.replace(/\s+/g, '').length % 4 === 0;
+  if (looksBase64) {
+    try {
+      const bin = atob(raw.replace(/\s+/g, ''));
+      const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+      return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    } catch {
+      // noop
+    }
+  }
+
+  if (raw.includes('Ã') || raw.includes('Â')) {
+    try {
+      const bytes = Uint8Array.from(raw, (c) => c.charCodeAt(0) & 0xff);
+      return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    } catch {
+      // noop
+    }
+  }
+
+  return raw;
+}
+
 function fmtSlot(ts: number) {
   return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 }
@@ -78,9 +105,6 @@ export function EpgGuideOverlay({ open, channels, selectedChannelIndex, fetchSho
     requestRef.current = reqId;
     setLoading(true);
 
-    const windowStart = slots[0] || Math.floor(Date.now() / SLOT_SECONDS) * SLOT_SECONDS;
-    const windowEnd = (slots[slots.length - 1] || windowStart) + SLOT_SECONDS;
-
     const from = clamp(selectedChannelIndex - 10, 0, Math.max(0, channels.length - 1));
     const to = clamp(from + 40, 0, channels.length);
     const scoped = channels.slice(from, to);
@@ -91,11 +115,11 @@ export function EpgGuideOverlay({ open, channels, selectedChannelIndex, fetchSho
         const list: any[] = data?.epg_listings || data?.Epg_listings || data?.listings || [];
         const programs = list
           .map((e: any) => ({
-            title: String(e.title ?? e.name ?? e.programme_title ?? ''),
+            title: decodePossiblyBase64Utf8(e.title ?? e.name ?? e.programme_title ?? ''),
             start: parseTs(e.start_timestamp ?? e.start ?? e.start_ts ?? e.begin ?? e.from),
             end: parseTs(e.stop_timestamp ?? e.end_timestamp ?? e.end ?? e.stop ?? e.to),
           }))
-          .filter((e: any) => e.start > 0 && e.end > e.start && e.end >= windowStart && e.start <= windowEnd)
+          .filter((e: any) => e.start > 0 && e.end > e.start)
           .sort((a: any, b: any) => a.start - b.start);
 
         return {
@@ -191,8 +215,11 @@ export function EpgGuideOverlay({ open, channels, selectedChannelIndex, fetchSho
             <div className="epgChanName">{row.name}</div>
             <div className="epgCells">
               {row.programs.length ? row.programs.map((p, idx) => {
-                const left = ((p.start - start) / total) * (slots.length * SLOT_WIDTH);
-                const width = Math.max(80, ((p.end - p.start) / total) * (slots.length * SLOT_WIDTH));
+                if (p.end < start || p.start > end + SLOT_SECONDS) return null;
+                const clippedStart = Math.max(p.start, start);
+                const clippedEnd = Math.min(p.end, end + SLOT_SECONDS);
+                const left = ((clippedStart - start) / total) * (slots.length * SLOT_WIDTH);
+                const width = Math.max(80, ((clippedEnd - clippedStart) / total) * (slots.length * SLOT_WIDTH));
                 return (
                   <div
                     key={`${row.streamId}-${idx}-${p.start}`}
