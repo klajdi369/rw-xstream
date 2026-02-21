@@ -231,17 +231,30 @@ export default function App() {
 
       const paint = () => {
         const nowSec = Date.now() / 1000;
-        let cur = entries.find((e: any) => e.start <= nowSec && e.end > nowSec) || entries[0];
+
+        let curIndex = entries.findIndex((e: any) => e.start <= nowSec && e.end > nowSec);
+        if (curIndex < 0) {
+          const firstFutureIndex = entries.findIndex((e: any) => e.start > nowSec);
+          curIndex = firstFutureIndex > 0 ? firstFutureIndex - 1 : entries.length - 1;
+        }
+
+        const cur = entries[curIndex];
         if (!cur) return;
-        const next = entries.find((e: any) => e.start >= cur.end) || null;
+
+        const next = entries[curIndex + 1] || null;
         const dur = Math.max(1, cur.end - cur.start);
         const progress = Math.min(100, Math.max(0, Math.round(((nowSec - cur.start) / dur) * 100)));
+
         setEpg({
           nowTitle: cur.title,
           nowTime: `${fmtTime(cur.start)} – ${fmtTime(cur.end)}`,
           progress,
           next: next ? `Next  ${fmtTime(next.start)}  ${next.title}` : '',
         });
+
+        if (!next && nowSec >= cur.end - 10) {
+          void fetchEpg(streamId);
+        }
       };
 
       paint();
