@@ -4,7 +4,7 @@ import mpegts from 'mpegts.js';
 import { Hud } from './components/Hud';
 import { SettingsOverlay } from './components/SettingsOverlay';
 import { Sidebar } from './components/Sidebar';
-import { EpgGuideOverlay, GuideRow } from './components/EpgGuideOverlay';
+import { EpgGuideOverlay } from './components/EpgGuideOverlay';
 import { Category, Channel, LastChannel } from './types/player';
 
 const SAVE_KEY = 'xtream_tv_v4';
@@ -33,7 +33,6 @@ export default function App() {
   const mtsRef = React.useRef<any>(null);
   const epgIntervalRef = React.useRef<any>(null);
   const epgRequestRef = React.useRef(0);
-  const guideRequestRef = React.useRef(0);
 
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
@@ -70,11 +69,6 @@ export default function App() {
   const [activeCatName, setActiveCatName] = React.useState('Channels');
   const [epg, setEpg] = React.useState<{ nowTitle: string; nowTime: string; progress: number; next: string } | null>(null);
   const [epgGuideOpen, setEpgGuideOpen] = React.useState(false);
-  const [epgGuideLoading, setEpgGuideLoading] = React.useState(false);
-  const [epgGuideRows, setEpgGuideRows] = React.useState<GuideRow[]>([]);
-  const [epgGuideSelRow, setEpgGuideSelRow] = React.useState(0);
-  const [epgGuideSelSlot, setEpgGuideSelSlot] = React.useState(1);
-  const [epgGuideStartTs, setEpgGuideStartTs] = React.useState(0);
 
   // Channel toast (shows channel name on zap)
   const [channelToast, setChannelToast] = React.useState('');
@@ -290,78 +284,16 @@ export default function App() {
     }
   }, [apiUrl, decodePossiblyBase64Utf8, jget, parseEpgTs, stopEpgRefresh]);
 
-  const epgGuideSlots = React.useMemo(() => {
-    const base = epgGuideStartTs || (Math.floor(Date.now() / 1000 / 1800) * 1800);
-    return Array.from({ length: 8 }, (_, i) => base + (i * 1800));
-  }, [epgGuideStartTs]);
+
+
+  const fetchShortEpg = React.useCallback(async (streamId: string | number, limit = 12) => {
+    return jget(apiUrl({ action: 'get_short_epg', stream_id: String(streamId), limit: String(limit) }));
+  }, [apiUrl, jget]);
 
   const openEpgGuide = React.useCallback(() => {
-    const base = Math.floor(Date.now() / 1000 / 1800) * 1800;
-    setEpgGuideStartTs(base);
-    setEpgGuideSelSlot(1);
-    setEpgGuideSelRow(selCh);
     setSidebarOpen(false);
     setEpgGuideOpen(true);
-  }, [selCh]);
-
-  const loadEpgGuide = React.useCallback(async () => {
-    if (!channels.length) {
-      setEpgGuideRows([]);
-      setEpgGuideLoading(false);
-      return;
-    }
-
-    const requestId = guideRequestRef.current + 1;
-    guideRequestRef.current = requestId;
-    setEpgGuideLoading(true);
-
-    const windowStart = epgGuideSlots[0] || Math.floor(Date.now() / 1000 / 1800) * 1800;
-    const windowEnd = (epgGuideSlots[epgGuideSlots.length - 1] || windowStart) + 1800;
-
-    const from = clamp(selCh - 10, 0, Math.max(0, channels.length - 1));
-    const to = clamp(from + 40, 0, channels.length);
-    const scoped = channels.slice(from, to);
-
-    const rows = await Promise.all(scoped.map(async (ch) => {
-      try {
-        const data: any = await jget(apiUrl({ action: 'get_short_epg', stream_id: String(ch.stream_id), limit: '12' }));
-        const list: any[] = data?.epg_listings || data?.Epg_listings || data?.listings || [];
-        const programs = list
-          .map((e: any) => ({
-            title: decodePossiblyBase64Utf8(e.title ?? e.name ?? e.programme_title ?? ''),
-            start: parseEpgTs(e.start_timestamp ?? e.start ?? e.start_ts ?? e.begin ?? e.from),
-            end: parseEpgTs(e.stop_timestamp ?? e.end_timestamp ?? e.end ?? e.stop ?? e.to),
-          }))
-          .filter((e: any) => e.start > 0 && e.end > e.start && e.end >= windowStart && e.start <= windowEnd)
-          .sort((a: any, b: any) => a.start - b.start);
-
-        return {
-          streamId: String(ch.stream_id),
-          name: ch.name || 'Channel',
-          programs,
-        };
-      } catch {
-        return {
-          streamId: String(ch.stream_id),
-          name: ch.name || 'Channel',
-          programs: [],
-        };
-      }
-    }));
-
-    if (requestId !== guideRequestRef.current) return;
-    setEpgGuideRows(rows);
-    setEpgGuideLoading(false);
-    setEpgGuideSelRow(clamp(selCh - from, 0, Math.max(0, rows.length - 1)));
-  }, [apiUrl, channels, decodePossiblyBase64Utf8, epgGuideSlots, jget, parseEpgTs, selCh]);
-
-  React.useEffect(() => {
-    if (!epgGuideOpen) return;
-    void loadEpgGuide();
-  }, [epgGuideOpen, loadEpgGuide]);
-
-
-
+  }, []);
   const preloadNearbyChannels = React.useCallback((list: Channel[], centerIndex: number) => {
     if (!list.length || !server || !user || !pass) return;
 
@@ -885,51 +817,6 @@ export default function App() {
       }
 
       if (epgGuideOpen) {
-        if (e.key === 'Escape' || e.key === 'Backspace' || isGuideOpenKey(e)) {
-          e.preventDefault();
-          setEpgGuideOpen(false);
-          return;
-        }
-        if (e.key === 'ArrowUp') {
-          e.preventDefault();
-          setEpgGuideSelRow((v) => clamp(v - 1, 0, Math.max(0, epgGuideRows.length - 1)));
-          return;
-        }
-        if (e.key === 'ArrowDown') {
-          e.preventDefault();
-          setEpgGuideSelRow((v) => clamp(v + 1, 0, Math.max(0, epgGuideRows.length - 1)));
-          return;
-        }
-        if (e.key === 'ArrowLeft') {
-          e.preventDefault();
-          if (epgGuideSelSlot <= 0) {
-            setEpgGuideStartTs((v) => v - 1800);
-          } else {
-            setEpgGuideSelSlot((v) => clamp(v - 1, 0, 7));
-          }
-          return;
-        }
-        if (e.key === 'ArrowRight') {
-          e.preventDefault();
-          if (epgGuideSelSlot >= 7) {
-            setEpgGuideStartTs((v) => v + 1800);
-          } else {
-            setEpgGuideSelSlot((v) => clamp(v + 1, 0, 7));
-          }
-          return;
-        }
-        if ((e.key === 'Enter' || e.key === ' ') && epgGuideRows[epgGuideSelRow]) {
-          e.preventDefault();
-          const streamId = epgGuideRows[epgGuideSelRow].streamId;
-          const idx = channels.findIndex((c) => String(c.stream_id) === streamId);
-          if (idx >= 0 && channels[idx]) {
-            setSelCh(idx);
-            playChannel(channels[idx]);
-            showToast(channels[idx].name || 'Channel');
-            setEpgGuideOpen(false);
-          }
-          return;
-        }
         return;
       }
 
@@ -1065,7 +952,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [categories, channels, connect, epgGuideOpen, epgGuideRows, epgGuideSelRow, epgGuideSelSlot, executeZap, focus, isGuideOpenKey, loadCategory, moveByChannelRow, openEpgGuide, playChannel, playingId, selCat, selCh, settingsOpen, showKeyIndicator, showToast, sidebarOpen, wakeHud, zapDigits]);
+  }, [categories, channels, connect, epgGuideOpen, executeZap, focus, isGuideOpenKey, loadCategory, moveByChannelRow, openEpgGuide, playChannel, playingId, selCat, selCh, settingsOpen, showKeyIndicator, showToast, sidebarOpen, wakeHud, zapDigits]);
 
   return (
     <>
@@ -1088,16 +975,21 @@ export default function App() {
       </div>
 
       <div id="backdrop" className={(sidebarOpen || epgGuideOpen) ? 'open' : ''} onClick={() => { setSidebarOpen(false); setEpgGuideOpen(false); }} />
-
-
       <EpgGuideOverlay
         open={epgGuideOpen}
-        loading={epgGuideLoading}
-        rows={epgGuideRows}
-        slots={epgGuideSlots}
-        selectedRow={epgGuideSelRow}
-        selectedSlot={epgGuideSelSlot}
+        channels={channels}
+        selectedChannelIndex={selCh}
+        fetchShortEpg={fetchShortEpg}
         onClose={() => setEpgGuideOpen(false)}
+        onPlayChannel={(streamId) => {
+          const idx = channels.findIndex((c) => String(c.stream_id) === String(streamId));
+          if (idx >= 0 && channels[idx]) {
+            setSelCh(idx);
+            playChannel(channels[idx]);
+            showToast(channels[idx].name || 'Channel');
+            setEpgGuideOpen(false);
+          }
+        }}
       />
 
       <Sidebar
