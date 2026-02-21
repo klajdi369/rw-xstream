@@ -10,6 +10,7 @@ const SAVE_KEY = 'xtream_tv_v4';
 const LAST_KEY = 'xtream_last_ch';
 const CHANNEL_PROXY_MEMORY_KEY = 'xtream_channel_proxy_memory_v1';
 const CHANNEL_PROXY_MAX_VISITS = 6;
+const CHANNEL_ROW_JUMP = 8;
 
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 
@@ -73,6 +74,8 @@ export default function App() {
   // Number zap (type channel number on remote)
   const [zapDigits, setZapDigits] = React.useState('');
   const zapTimerRef = React.useRef<any>(null);
+  const [keyIndicator, setKeyIndicator] = React.useState('');
+  const keyIndicatorTimerRef = React.useRef<any>(null);
 
   const cacheRef = React.useRef<Map<string, Channel[]>>(new Map());
   const activeCatRef = React.useRef<string>('');
@@ -115,6 +118,30 @@ export default function App() {
 
   const writeChannelProxyMemory = React.useCallback((next: Record<string, { useProxy: boolean; visits: number }>) => {
     localStorage.setItem(CHANNEL_PROXY_MEMORY_KEY, JSON.stringify(next));
+  }, []);
+
+  const showKeyIndicator = React.useCallback((key: string) => {
+    const labels: Record<string, string> = {
+      ArrowUp: '↑',
+      ArrowDown: '↓',
+      ArrowLeft: '←',
+      ArrowRight: '→',
+      Enter: 'OK',
+      Escape: 'ESC',
+      Backspace: 'BACK',
+      ' ': 'SPACE',
+      PageUp: 'CH+',
+      PageDown: 'CH-',
+      ChannelUp: 'CH+',
+      ChannelDown: 'CH-',
+      MediaTrackPrevious: 'CH+',
+      MediaTrackNext: 'CH-',
+    };
+    const normalized = key === 'Spacebar' ? ' ' : key;
+    const display = labels[normalized] || normalized;
+    setKeyIndicator(display);
+    clearTimeout(keyIndicatorTimerRef.current);
+    keyIndicatorTimerRef.current = setTimeout(() => setKeyIndicator(''), 900);
   }, []);
 
   const wakeHud = React.useCallback(() => {
@@ -673,6 +700,7 @@ export default function App() {
     return () => {
       stopPlayback();
       clearTimeout(hudTimerRef.current);
+      clearTimeout(keyIndicatorTimerRef.current);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -711,8 +739,19 @@ export default function App() {
     }
   }, [channels, playChannel, showToast]);
 
+  const moveByChannelRow = React.useCallback((dir: 1 | -1) => {
+    const step = CHANNEL_ROW_JUMP * dir;
+    const n = clamp(selCh + step, 0, Math.max(0, channels.length - 1));
+    setSelCh(n);
+    if (channels[n]) {
+      playChannel(channels[n]);
+      showToast(channels[n].name || 'Channel');
+    }
+  }, [channels, playChannel, selCh, showToast]);
+
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      showKeyIndicator(e.key);
       if (settingsOpen) {
         if (e.key === 'Escape' || e.key === 'Backspace') setSettingsOpen(false);
         if (e.key === 'Enter') connect();
@@ -736,6 +775,16 @@ export default function App() {
       wakeHud();
 
       if (!sidebarOpen) {
+        if (['PageUp', 'ChannelUp', 'MediaTrackPrevious'].includes(e.key)) {
+          e.preventDefault();
+          moveByChannelRow(-1);
+          return;
+        }
+        if (['PageDown', 'ChannelDown', 'MediaTrackNext'].includes(e.key)) {
+          e.preventDefault();
+          moveByChannelRow(1);
+          return;
+        }
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           // Snap selection to the currently playing channel
@@ -785,6 +834,23 @@ export default function App() {
         return setFocus('channels');
       }
 
+      if (['PageUp', 'ChannelUp', 'MediaTrackPrevious'].includes(e.key)) {
+        e.preventDefault();
+        if (focus === 'categories') {
+          setSelCat((v) => clamp(v - CHANNEL_ROW_JUMP, 0, Math.max(0, categories.length - 1)));
+        } else {
+          setSelCh((v) => clamp(v - CHANNEL_ROW_JUMP, 0, Math.max(0, channels.length - 1)));
+        }
+      }
+      if (['PageDown', 'ChannelDown', 'MediaTrackNext'].includes(e.key)) {
+        e.preventDefault();
+        if (focus === 'categories') {
+          setSelCat((v) => clamp(v + CHANNEL_ROW_JUMP, 0, Math.max(0, categories.length - 1)));
+        } else {
+          setSelCh((v) => clamp(v + CHANNEL_ROW_JUMP, 0, Math.max(0, channels.length - 1)));
+        }
+      }
+
       if (e.key === 'ArrowUp') {
         e.preventDefault();
         if (focus === 'categories') {
@@ -818,7 +884,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [categories, channels, connect, executeZap, focus, loadCategory, playChannel, playingId, selCat, selCh, settingsOpen, showToast, sidebarOpen, wakeHud, zapDigits]);
+  }, [categories, channels, connect, executeZap, focus, loadCategory, moveByChannelRow, playChannel, playingId, selCat, selCh, settingsOpen, showKeyIndicator, showToast, sidebarOpen, wakeHud, zapDigits]);
 
   return (
     <>
@@ -870,7 +936,7 @@ export default function App() {
         }}
       />
 
-      <Hud title={hudTitle} subtitle={hudSub} hidden={hudHidden || settingsOpen} onOpenSettings={() => setSettingsOpen(true)} epg={epg} />
+      <Hud title={hudTitle} subtitle={hudSub} hidden={hudHidden || settingsOpen} onOpenSettings={() => setSettingsOpen(true)} keyIndicator={keyIndicator} epg={epg} />
 
       <SettingsOverlay
         open={settingsOpen}
