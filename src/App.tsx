@@ -29,8 +29,8 @@ export default function App() {
   const [connectMsg, setConnectMsg] = React.useState('Connecting…');
   const [connectProgress, setConnectProgress] = React.useState(0);
 
-  const [hudTitle, setHudTitle] = React.useState('VOD Player');
-  const [hudSub, setHudSub] = React.useState('Open search and pick a movie or series');
+  const [hudTitle, setHudTitle] = React.useState('RW XStream');
+  const [hudSub, setHudSub] = React.useState('Netflix-style search: browse movies & series');
   const [hudHidden, setHudHidden] = React.useState(true);
   const [focus, setFocus] = React.useState<'results' | 'episodes'>('results');
 
@@ -308,8 +308,8 @@ export default function App() {
       setMsg(`Connected! ${movies.length} movies + ${series.length} series.`);
       setMsgIsError(false);
       setSettingsOpen(false);
-      setHudTitle('VOD Ready');
-      setHudSub('Search and press OK to play');
+      setHudTitle('RW XStream');
+      setHudSub('Browse like Netflix · OK to play');
       wakeHud();
     } catch (e: any) {
       setMsg(`Failed: ${e?.message || String(e)}. Check provider URL/server reachability.`);
@@ -412,36 +412,48 @@ export default function App() {
         return;
       }
 
-      if (e.key === 'ArrowLeft' && focus === 'episodes') {
+      if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        setFocus('results');
+        if (focus === 'episodes') {
+          setFocus('results');
+          return;
+        }
+        setSelectedResult((v) => clamp(v - 1, 0, Math.max(0, results.length - 1)));
         return;
       }
-      if (e.key === 'ArrowRight' && focus === 'results' && episodes.length) {
+      if (e.key === 'ArrowRight') {
         e.preventDefault();
-        setFocus('episodes');
+        if (focus === 'results' && episodes.length) {
+          setFocus('episodes');
+          return;
+        }
+        if (focus === 'episodes') {
+          setSelectedEpisode((v) => clamp(v + 1, 0, Math.max(0, episodes.length - 1)));
+          return;
+        }
+        setSelectedResult((v) => clamp(v + 1, 0, Math.max(0, results.length - 1)));
         return;
       }
 
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        if (focus === 'results') setSelectedResult((v) => clamp(v - 1, 0, Math.max(0, results.length - 1)));
-        else setSelectedEpisode((v) => clamp(v - 1, 0, Math.max(0, episodes.length - 1)));
+        if (focus === 'results') setSelectedResult((v) => clamp(v - 6, 0, Math.max(0, results.length - 1)));
+        else setSelectedEpisode((v) => clamp(v - 6, 0, Math.max(0, episodes.length - 1)));
       }
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        if (focus === 'results') setSelectedResult((v) => clamp(v + 1, 0, Math.max(0, results.length - 1)));
-        else setSelectedEpisode((v) => clamp(v + 1, 0, Math.max(0, episodes.length - 1)));
+        if (focus === 'results') setSelectedResult((v) => clamp(v + 6, 0, Math.max(0, results.length - 1)));
+        else setSelectedEpisode((v) => clamp(v + 6, 0, Math.max(0, episodes.length - 1)));
       }
       if (e.key === 'PageUp') {
         e.preventDefault();
-        if (focus === 'results') setSelectedResult((v) => clamp(v - 8, 0, Math.max(0, results.length - 1)));
-        else setSelectedEpisode((v) => clamp(v - 8, 0, Math.max(0, episodes.length - 1)));
+        if (focus === 'results') setSelectedResult((v) => clamp(v - 18, 0, Math.max(0, results.length - 1)));
+        else setSelectedEpisode((v) => clamp(v - 18, 0, Math.max(0, episodes.length - 1)));
       }
       if (e.key === 'PageDown') {
         e.preventDefault();
-        if (focus === 'results') setSelectedResult((v) => clamp(v + 8, 0, Math.max(0, results.length - 1)));
-        else setSelectedEpisode((v) => clamp(v + 8, 0, Math.max(0, episodes.length - 1)));
+        if (focus === 'results') setSelectedResult((v) => clamp(v + 18, 0, Math.max(0, results.length - 1)));
+        else setSelectedEpisode((v) => clamp(v + 18, 0, Math.max(0, episodes.length - 1)));
       }
 
       if (e.key === 'Enter' || e.key === ' ') {
@@ -473,7 +485,7 @@ export default function App() {
 
   return (
     <>
-      <div id="videoLayer"><video id="video" ref={videoRef} autoPlay playsInline controls /></div>
+      <div id="videoLayer"><video id="video" ref={videoRef} autoPlay playsInline /></div>
 
       <div id="bufferOverlay" className={buffering ? 'show' : ''}>
         <div className="bufferSpin" />

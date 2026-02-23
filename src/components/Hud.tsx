@@ -31,10 +31,10 @@ export function Hud({ title, subtitle, hidden, onOpenSettings, keyIndicator, epg
       </div>
       <div id="keyIndicator" className={keyIndicator ? 'show' : ''}>{keyIndicator || ''}</div>
       <div className="hudHint">
-        <kbd>OK</kbd> open list<br />
-        <kbd>&#x2191;</kbd> <kbd>&#x2193;</kbd> prev / next<br />
-        <kbd>&#x2190;</kbd> categories<br />
-        <kbd>Back</kbd> close<br />
+        <kbd>OK</kbd> browse catalog<br />
+        <kbd>&#x2191;</kbd> <kbd>&#x2193;</kbd> move selection<br />
+        <kbd>&#x2192;</kbd> episodes / <kbd>&#x2190;</kbd> back<br />
+        <kbd>Back</kbd> close search<br />
         <button id="settingsBtn" onClick={onOpenSettings}>Settings</button>
       </div>
     </div>
