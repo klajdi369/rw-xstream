@@ -60,6 +60,9 @@ export default function App() {
   const hudTimerRef = React.useRef<any>(null);
   const playTokenRef = React.useRef(0);
   const seriesEpisodeCacheRef = React.useRef<Map<string, SeriesEpisode[]>>(new Map());
+  const backendBaseRef = React.useRef(import.meta.env.DEV
+    ? `${window.location.protocol}//${window.location.hostname}:3005`
+    : window.location.origin);
 
   const apiUrl = React.useCallback((params: Record<string, any>) => {
     const u = new URL(`${normServer(server)}/player_api.php`);
@@ -69,10 +72,22 @@ export default function App() {
     return u.toString();
   }, [server, user, pass]);
 
+  const apiProxyUrl = React.useCallback((params: Record<string, any>) => {
+    const direct = apiUrl(params);
+    return `${backendBaseRef.current}/proxy?url=${encodeURIComponent(direct)}&deint=0`;
+  }, [apiUrl]);
+
   const jget = React.useCallback(async (url: string): Promise<any> => {
-    const r = await fetch(url);
+    const r = await fetch(url, { cache: 'no-store' });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r.json();
+
+    // Handle very large payloads (10MB+) and providers that send incorrect content-types.
+    const text = await r.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error('Invalid JSON from provider');
+    }
   }, []);
 
   const wakeHud = React.useCallback(() => {
@@ -187,7 +202,7 @@ export default function App() {
 
     let cached = seriesEpisodeCacheRef.current.get(seriesId);
     if (!cached) {
-      const data = await jget(apiUrl({ action: 'get_series_info', series_id: seriesId }));
+      const data = await jget(apiProxyUrl({ action: 'get_series_info', series_id: seriesId }));
       const rawEpisodes = data?.episodes || {};
       const flattened: SeriesEpisode[] = [];
 
@@ -220,7 +235,7 @@ export default function App() {
     setSelectedEpisode(0);
     setHudSub(cached.length ? `Loaded ${cached.length} episodes` : 'No episodes found');
     wakeHud();
-  }, [apiUrl, jget, wakeHud]);
+  }, [apiProxyUrl, jget, wakeHud]);
 
   const connect = React.useCallback(async () => {
     if (!server || !user || !pass) {
@@ -237,13 +252,13 @@ export default function App() {
       setMsg('Connecting…');
       setMsgIsError(false);
 
-      const auth: any = await jget(apiUrl({}));
+      const auth: any = await jget(apiProxyUrl({}));
       if (!auth?.user_info?.auth) throw new Error('Auth failed');
 
       setConnectMsg('Loading movies…');
       setConnectProgress(40);
       setSettingsProgress(40);
-      const moviesRaw: any = await jget(apiUrl({ action: 'get_vod_streams' }));
+      const moviesRaw: any = await jget(apiProxyUrl({ action: 'get_vod_streams' }));
       const movies: MediaResult[] = (Array.isArray(moviesRaw) ? moviesRaw : []).map((m: any) => ({
         kind: 'movie' as const,
         id: String(m.stream_id),
@@ -255,7 +270,7 @@ export default function App() {
       setConnectMsg('Loading series…');
       setConnectProgress(70);
       setSettingsProgress(70);
-      const seriesRaw: any = await jget(apiUrl({ action: 'get_series' }));
+      const seriesRaw: any = await jget(apiProxyUrl({ action: 'get_series' }));
       const series: MediaResult[] = (Array.isArray(seriesRaw) ? seriesRaw : []).map((s: any) => ({
         kind: 'series' as const,
         id: String(s.series_id),
@@ -297,7 +312,7 @@ export default function App() {
       setHudSub('Search and press OK to play');
       wakeHud();
     } catch (e: any) {
-      setMsg(`Failed: ${e?.message || String(e)}`);
+      setMsg(`Failed: ${e?.message || String(e)}. Check provider URL/server reachability.`);
       setMsgIsError(true);
       setSettingsOpen(true);
       setSettingsProgress(0);
@@ -305,7 +320,7 @@ export default function App() {
       setConnecting(false);
       setConnectProgress(0);
     }
-  }, [apiUrl, fmt, jget, pass, playMovie, remember, rememberProxyMode, server, useProxy, user, wakeHud]);
+  }, [apiProxyUrl, fmt, jget, pass, playMovie, remember, rememberProxyMode, server, useProxy, user, wakeHud]);
 
   React.useEffect(() => {
     const saved: any = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}');
