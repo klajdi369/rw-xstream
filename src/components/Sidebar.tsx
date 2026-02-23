@@ -17,6 +17,11 @@ type Props = {
   onPickEpisode: (index: number) => void;
 };
 
+function Poster({ src, alt }: { src: string; alt: string }) {
+  if (!src) return <div className="thumb fallback" aria-hidden="true">🎬</div>;
+  return <img className="thumb" src={src} alt={alt} loading="lazy" decoding="async" referrerPolicy="no-referrer" />;
+}
+
 export function Sidebar(props: Props) {
   const {
     open,
@@ -37,31 +42,33 @@ export function Sidebar(props: Props) {
     <div id="sidebar" className={open ? 'open' : ''}>
       <div className={`panel ${focus === 'results' ? 'active' : ''}`} id="catPanel">
         <div className="panelHead">
-          <span className="ttl">Search</span>
+          <span className="ttl">Search VOD</span>
           <span className="badge">{results.length}</span>
         </div>
         <div className="searchWrap">
           <input
             className="sInput"
-            placeholder="Search series or movies…"
+            placeholder="Type to search movies/series…"
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
           />
+          <div className="isub">Remote: type letters, ↑↓ navigate, OK select, → episodes</div>
         </div>
         <VirtualList
           items={results}
           selectedIndex={selectedResult}
           active={open && focus === 'results'}
           onPick={onPickResult}
+          itemHeight={92}
           render={(item) => {
             const typeLabel = item.kind === 'series' ? 'Series' : 'Movie';
             const key = `${item.kind}:${item.id}`;
             const isPlaying = key === playingKey;
             return (
               <>
-                <div className="dot" />
+                <Poster src={item.poster} alt={item.name || typeLabel} />
                 <div className="meta">
-                  <div className="iname">{item.name || 'Untitled'}</div>
+                  <div className="iname multiline">{item.name || 'Untitled'}</div>
                   <div className="isub">{typeLabel}</div>
                 </div>
                 {isPlaying && <span className="liveTag">Playing</span>}
@@ -78,22 +85,23 @@ export function Sidebar(props: Props) {
           <span className="badge">{episodes.length}</span>
         </div>
         <div className="searchWrap">
-          <div className="isub">Pick an episode to play</div>
+          <div className="isub">Remote: ↑↓ navigate, OK play, ← back to results</div>
         </div>
         <VirtualList
           items={episodes}
           selectedIndex={selectedEpisode}
           active={open && focus === 'episodes'}
           onPick={onPickEpisode}
+          itemHeight={96}
           render={(episode) => {
             const key = `episode:${episode.id}`;
             const isPlaying = key === playingKey;
             return (
               <>
+                <Poster src={episode.poster} alt={episode.title || `Episode ${episode.episodeNum}`} />
                 <span className="chNum">S{episode.season}E{episode.episodeNum}</span>
-                <div className="dot" />
                 <div className="meta">
-                  <div className="iname">{episode.title || `Episode ${episode.episodeNum}`}</div>
+                  <div className="iname multiline">{episode.title || `Episode ${episode.episodeNum}`}</div>
                 </div>
                 {isPlaying && <span className="liveTag">Playing</span>}
               </>

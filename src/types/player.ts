@@ -3,12 +3,14 @@ export type VodMovie = {
   id: string;
   name: string;
   containerExtension: string;
+  poster: string;
 };
 
 export type SeriesResult = {
   kind: 'series';
   id: string;
   name: string;
+  poster: string;
 };
 
 export type SeriesEpisode = {
@@ -17,6 +19,7 @@ export type SeriesEpisode = {
   season: number;
   episodeNum: number;
   containerExtension: string;
+  poster: string;
 };
 
 export type MediaResult = VodMovie | SeriesResult;

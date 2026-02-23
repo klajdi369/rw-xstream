@@ -206,6 +206,7 @@ export default function App() {
             season,
             episodeNum: Number.isFinite(episodeNumRaw) && episodeNumRaw > 0 ? episodeNumRaw : i + 1,
             containerExtension: String(info?.container_extension ?? entry?.container_extension ?? 'mp4'),
+            poster: String(info?.movie_image ?? entry?.movie_image ?? ''),
           });
         });
       });
@@ -248,6 +249,7 @@ export default function App() {
         id: String(m.stream_id),
         name: String(m.name || 'Untitled movie'),
         containerExtension: String(m.container_extension || 'mp4'),
+        poster: String(m.stream_icon || ''),
       }));
 
       setConnectMsg('Loading series…');
@@ -258,6 +260,7 @@ export default function App() {
         kind: 'series' as const,
         id: String(s.series_id),
         name: String(s.name || 'Untitled series'),
+        poster: String(s.cover || s.cover_big || ''),
       }));
 
       const merged = [...movies, ...series].sort((a, b) => a.name.localeCompare(b.name));
@@ -362,10 +365,35 @@ export default function App() {
         return;
       }
 
-      if (e.key === 'Escape' || e.key === 'Backspace') {
+      if (e.key === 'Escape') {
         e.preventDefault();
         if (focus === 'episodes') setFocus('results');
         else setSidebarOpen(false);
+        return;
+      }
+
+      if (focus === 'results' && e.key === 'Backspace') {
+        e.preventDefault();
+        if (query.length > 0) {
+          setQuery((v) => v.slice(0, -1));
+          return;
+        }
+        setSidebarOpen(false);
+        return;
+      }
+
+      if (focus === 'results' && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        const ch = e.key;
+        if (/^[\w\s\-'.:&]$/u.test(ch)) {
+          e.preventDefault();
+          setQuery((v) => `${v}${ch}`);
+          return;
+        }
+      }
+
+      if (focus === 'episodes' && e.key === 'Backspace') {
+        e.preventDefault();
+        setFocus('results');
         return;
       }
 
@@ -389,6 +417,16 @@ export default function App() {
         e.preventDefault();
         if (focus === 'results') setSelectedResult((v) => clamp(v + 1, 0, Math.max(0, results.length - 1)));
         else setSelectedEpisode((v) => clamp(v + 1, 0, Math.max(0, episodes.length - 1)));
+      }
+      if (e.key === 'PageUp') {
+        e.preventDefault();
+        if (focus === 'results') setSelectedResult((v) => clamp(v - 8, 0, Math.max(0, results.length - 1)));
+        else setSelectedEpisode((v) => clamp(v - 8, 0, Math.max(0, episodes.length - 1)));
+      }
+      if (e.key === 'PageDown') {
+        e.preventDefault();
+        if (focus === 'results') setSelectedResult((v) => clamp(v + 8, 0, Math.max(0, results.length - 1)));
+        else setSelectedEpisode((v) => clamp(v + 8, 0, Math.max(0, episodes.length - 1)));
       }
 
       if (e.key === 'Enter' || e.key === ' ') {
