@@ -1,15 +1,29 @@
-export type Category = {
-  category_id: string | number;
-  category_name: string;
+export type VodMovie = {
+  kind: 'movie';
+  id: string;
+  name: string;
+  containerExtension: string;
 };
 
-export type Channel = {
-  stream_id: string | number;
+export type SeriesResult = {
+  kind: 'series';
+  id: string;
   name: string;
 };
 
-export type LastChannel = {
-  streamId: string;
+export type SeriesEpisode = {
+  id: string;
+  title: string;
+  season: number;
+  episodeNum: number;
+  containerExtension: string;
+};
+
+export type MediaResult = VodMovie | SeriesResult;
+
+export type LastPlayed = {
+  kind: 'movie' | 'episode';
+  id: string;
   name: string;
-  catId: string | number | null;
+  seriesId?: string;
 };
