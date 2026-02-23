@@ -18,6 +18,16 @@ function normServer(s: string) {
   return t.replace(/\/+$/, '');
 }
 
+function fmtDuration(sec: number) {
+  if (!Number.isFinite(sec) || sec < 0) return '00:00';
+  const total = Math.floor(sec);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
 export default function App() {
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const hlsRef = React.useRef<Hls | null>(null);
@@ -56,6 +66,11 @@ export default function App() {
 
   const [buffering, setBuffering] = React.useState(false);
   const [playingKey, setPlayingKey] = React.useState<string | null>(null);
+  const [playerTime, setPlayerTime] = React.useState(0);
+  const [playerDuration, setPlayerDuration] = React.useState(0);
+  const [isPaused, setIsPaused] = React.useState(false);
+  const [subtitleTracks, setSubtitleTracks] = React.useState<Array<{ index: number; label: string }>>([]);
+  const [subtitleIndex, setSubtitleIndex] = React.useState(-1);
 
   const hudTimerRef = React.useRef<any>(null);
   const playTokenRef = React.useRef(0);
@@ -237,6 +252,51 @@ export default function App() {
     wakeHud();
   }, [apiProxyUrl, jget, wakeHud]);
 
+
+  const seekBy = React.useCallback((seconds: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const dur = Number.isFinite(v.duration) ? v.duration : 0;
+    const next = clamp(v.currentTime + seconds, 0, Math.max(0, dur || v.currentTime + seconds));
+    v.currentTime = next;
+    setPlayerTime(next);
+    wakeHud();
+  }, [wakeHud]);
+
+  const togglePlayPause = React.useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) v.play().catch(() => undefined);
+    else v.pause();
+    wakeHud();
+  }, [wakeHud]);
+
+  const applySubtitleSelection = React.useCallback((nextIndex: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    const tracks = Array.from(v.textTracks || []);
+    tracks.forEach((track, i) => {
+      track.mode = i === nextIndex ? 'showing' : 'disabled';
+    });
+    setSubtitleIndex(nextIndex);
+    const chosen = tracks[nextIndex];
+    setHudSub(chosen ? `Subtitles: ${chosen.label || chosen.language || `Track ${nextIndex + 1}`}` : 'Subtitles: Off');
+    wakeHud();
+  }, [wakeHud]);
+
+  const cycleSubtitle = React.useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const tracks = Array.from(v.textTracks || []);
+    if (!tracks.length) {
+      setHudSub('No subtitles available');
+      wakeHud();
+      return;
+    }
+    const next = subtitleIndex >= tracks.length - 1 ? -1 : subtitleIndex + 1;
+    applySubtitleSelection(next);
+  }, [applySubtitleSelection, subtitleIndex, wakeHud]);
+
   const connect = React.useCallback(async () => {
     if (!server || !user || !pass) {
       setMsg('Fill all fields');
@@ -360,6 +420,46 @@ export default function App() {
     }
   }, [hudHidden, settingsOpen, sidebarOpen]);
 
+
+  React.useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+
+    const syncTracks = () => {
+      const tracks = Array.from(v.textTracks || []);
+      setSubtitleTracks(tracks.map((t, index) => ({ index, label: t.label || t.language || `Track ${index + 1}` })));
+      const active = tracks.findIndex((t) => t.mode === 'showing');
+      setSubtitleIndex(active);
+    };
+
+    const onTime = () => {
+      setPlayerTime(v.currentTime || 0);
+      setPlayerDuration(Number.isFinite(v.duration) ? v.duration : 0);
+    };
+
+    const onPlay = () => setIsPaused(false);
+    const onPause = () => setIsPaused(true);
+
+    v.addEventListener('timeupdate', onTime);
+    v.addEventListener('loadedmetadata', onTime);
+    v.addEventListener('durationchange', onTime);
+    v.addEventListener('play', onPlay);
+    v.addEventListener('pause', onPause);
+    v.addEventListener('loadedmetadata', syncTracks);
+
+    syncTracks();
+    onTime();
+
+    return () => {
+      v.removeEventListener('timeupdate', onTime);
+      v.removeEventListener('loadedmetadata', onTime);
+      v.removeEventListener('durationchange', onTime);
+      v.removeEventListener('play', onPlay);
+      v.removeEventListener('pause', onPause);
+      v.removeEventListener('loadedmetadata', syncTracks);
+    };
+  }, [playingKey]);
+
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (settingsOpen) {
@@ -371,10 +471,36 @@ export default function App() {
       wakeHud();
 
       if (!sidebarOpen) {
-        if (e.key === 'Enter' || e.key === ' ') {
+        if (e.key === 'Enter') {
           e.preventDefault();
           setSidebarOpen(true);
           setFocus('results');
+          return;
+        }
+        if (e.key === ' ') {
+          e.preventDefault();
+          togglePlayPause();
+          return;
+        }
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          seekBy(-10);
+          return;
+        }
+        if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          seekBy(10);
+          return;
+        }
+        if (e.key === 'Backspace' || e.key === 'Escape') {
+          e.preventDefault();
+          setSidebarOpen(true);
+          setFocus('results');
+          return;
+        }
+        if (e.key.toLowerCase() === 's') {
+          e.preventDefault();
+          cycleSubtitle();
           return;
         }
         return;
@@ -481,7 +607,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [connect, episodes, focus, loadSeriesEpisodes, playEpisode, playMovie, query, results, selectedEpisode, selectedResult, settingsOpen, sidebarOpen, wakeHud]);
+  }, [connect, cycleSubtitle, episodes, focus, loadSeriesEpisodes, playEpisode, playMovie, query, results, seekBy, selectedEpisode, selectedResult, settingsOpen, sidebarOpen, togglePlayPause, wakeHud]);
 
   return (
     <>
@@ -489,6 +615,41 @@ export default function App() {
 
       <div id="bufferOverlay" className={buffering ? 'show' : ''}>
         <div className="bufferSpin" />
+      </div>
+
+
+      <div id="playerControls" className={!sidebarOpen && !settingsOpen && playingKey ? 'show' : ''}>
+        <button className="pcBtn" onClick={() => seekBy(-10)}>« 10s</button>
+        <button className="pcBtn" onClick={togglePlayPause}>{isPaused ? 'Play' : 'Pause'}</button>
+        <button className="pcBtn" onClick={() => seekBy(10)}>10s »</button>
+        <div className="seekWrap">
+          <span>{fmtDuration(playerTime)}</span>
+          <input
+            type="range"
+            min={0}
+            max={Math.max(1, Math.floor(playerDuration || 1))}
+            value={Math.min(Math.floor(playerTime), Math.max(1, Math.floor(playerDuration || 1)))}
+            onChange={(e) => {
+              const v = videoRef.current;
+              if (!v) return;
+              const next = Number(e.target.value || 0);
+              v.currentTime = next;
+              setPlayerTime(next);
+            }}
+          />
+          <span>{fmtDuration(playerDuration)}</span>
+        </div>
+        <button className="pcBtn" onClick={() => setSidebarOpen(true)}>Back</button>
+        <select
+          className="subSelect"
+          value={String(subtitleIndex)}
+          onChange={(e) => applySubtitleSelection(Number(e.target.value))}
+        >
+          <option value="-1">Subtitles Off</option>
+          {subtitleTracks.map((track) => (
+            <option key={track.index} value={String(track.index)}>{track.label}</option>
+          ))}
+        </select>
       </div>
 
       <div id="backdrop" className={sidebarOpen ? 'open' : ''} onClick={() => setSidebarOpen(false)} />

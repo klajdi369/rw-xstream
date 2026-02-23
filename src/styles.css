@@ -331,6 +331,51 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   font-size: 20px;
 }
 
+
+#playerControls {
+  position: fixed;
+  left: 24px;
+  right: 24px;
+  bottom: 18px;
+  z-index: 9;
+  display: none;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  background: rgba(0, 0, 0, .78);
+  backdrop-filter: blur(8px);
+}
+#playerControls.show { display: flex; }
+.pcBtn {
+  border: 1px solid rgba(255,255,255,.18);
+  background: rgba(255,255,255,.08);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.seekWrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  font-size: 13px;
+  color: rgba(232,240,250,.8);
+}
+.seekWrap input[type="range"] {
+  flex: 1;
+}
+.subSelect {
+  border: 1px solid rgba(255,255,255,.2);
+  background: rgba(255,255,255,.08);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px;
+}
+
 /* ─── Settings overlay ─── */
 #settingsOverlay {
   position: fixed; inset: 0; z-index: 100;
