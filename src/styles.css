@@ -155,20 +155,49 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
 
 /* ─── Sidebar ─── */
 #sidebar {
-  position: fixed; top: 0; left: 0; bottom: 0;
-  width: 740px; max-width: 85vw; z-index: 10; display: flex;
-  transform: translateX(-100%);
+  position: fixed; inset: 0;
+  z-index: 10;
+  transform: translateY(100%);
   transition: transform .28s cubic-bezier(.4, 0, .2, 1);
-  box-shadow: 12px 0 40px rgba(0, 0, 0, .5);
+  background: linear-gradient(180deg, rgba(8, 10, 14, .88), rgba(4, 5, 8, .96));
+  backdrop-filter: blur(8px);
 }
-#sidebar.open { transform: translateX(0); }
+#sidebar.open { transform: translateY(0); }
 
-.panel {
-  display: flex; flex-direction: column; height: 100%;
-  background: var(--panel); border-right: 1px solid var(--line); overflow: hidden;
+.netflixHeader {
+  display: flex; align-items: center; gap: 18px;
+  padding: 20px 28px 12px;
 }
-#catPanel { width: 280px; flex-shrink: 0; }
-#chPanel { flex: 1; min-width: 0; }
+.brand {
+  font-size: 28px;
+  font-weight: 900;
+  color: #e50914;
+  letter-spacing: .3px;
+}
+.netflixHero {
+  margin: 0 28px 14px;
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 16px;
+  padding: 14px;
+  display: flex; align-items: center; gap: 16px;
+  background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.01));
+}
+.heroText h2 { margin: 0; font-size: 28px; line-height: 1.15; }
+.heroText p { margin: 6px 0 0; color: rgba(232, 240, 250, .72); font-size: 15px; }
+.heroKicker { text-transform: uppercase; font-size: 12px; color: #e50914; font-weight: 800; margin-bottom: 6px; }
+.railsWrap {
+  display: grid;
+  grid-template-columns: minmax(620px, 1fr) minmax(380px, 38vw);
+  gap: 12px;
+  height: calc(100% - 210px);
+  padding: 0 28px 20px;
+}
+.panel {
+  display: flex; flex-direction: column; min-height: 0;
+  background: rgba(8, 12, 18, .86); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+}
+#catPanel { min-width: 0; }
+#chPanel { min-width: 0; }
 
 .panelHead {
   padding: 20px 20px 16px; background: rgba(0, 0, 0, .35);
@@ -192,9 +221,9 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   font-weight: 600; font-variant-numeric: tabular-nums;
 }
 
-.searchWrap { padding: 10px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.searchWrap { padding: 12px; border-bottom: 1px solid var(--line); flex-shrink: 0; display: grid; gap: 8px; }
 .sInput {
-  width: 100%; font-size: 17px; padding: 11px 14px;
+  width: 100%; font-size: 18px; padding: 13px 16px;
   border-radius: 10px; border: 1px solid var(--line);
   background: rgba(0, 0, 0, .3); color: var(--text); outline: none;
   transition: border-color .15s, box-shadow .15s;
@@ -218,7 +247,7 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
 
 /* ─── List items ─── */
 .item {
-  position: absolute; left: 8px; right: 8px; height: 70px;
+  position: absolute; left: 8px; right: 8px; height: 104px;
   padding: 0 16px; border-radius: 12px; border: 2px solid transparent;
   display: flex; align-items: center; gap: 14px;
   cursor: pointer; user-select: none;
@@ -253,8 +282,8 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   box-shadow: 0 0 10px rgba(29, 209, 161, .7);
 }
 .chNum {
-  font-size: 13px; font-weight: 700; color: rgba(232, 240, 250, .30);
-  width: 32px; text-align: right; flex-shrink: 0;
+  font-size: 14px; font-weight: 800; color: rgba(232, 240, 250, .55);
+  width: 72px; text-align: right; flex-shrink: 0;
   font-variant-numeric: tabular-nums;
 }
 .item.sel .chNum { color: rgba(232, 240, 250, .55); }
@@ -263,11 +292,18 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   display: flex; flex-direction: column; gap: 3px;
 }
 .iname {
-  font-size: 16px; font-weight: 700; letter-spacing: -0.1px;
+  font-size: 17px; font-weight: 800; letter-spacing: -0.1px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.iname.multiline {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.22;
+}
 .isub {
-  font-size: 12px; color: var(--muted);
+  font-size: 13px; color: rgba(232, 240, 250, .65);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 /* Live indicator on playing item */
@@ -277,6 +313,67 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   border: 1px solid rgba(29, 209, 161, .2);
   border-radius: 4px; padding: 2px 7px; flex-shrink: 0;
   text-transform: uppercase;
+}
+
+
+.thumb {
+  width: 118px;
+  height: 74px;
+  border-radius: 8px;
+  object-fit: cover;
+  border: 1px solid rgba(255, 255, 255, .14);
+  background: rgba(255, 255, 255, .04);
+  flex-shrink: 0;
+}
+.thumb.fallback {
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+}
+
+
+#playerControls {
+  position: fixed;
+  left: 24px;
+  right: 24px;
+  bottom: 18px;
+  z-index: 9;
+  display: none;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  background: rgba(0, 0, 0, .78);
+  backdrop-filter: blur(8px);
+}
+#playerControls.show { display: flex; }
+.pcBtn {
+  border: 1px solid rgba(255,255,255,.18);
+  background: rgba(255,255,255,.08);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.seekWrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  font-size: 13px;
+  color: rgba(232,240,250,.8);
+}
+.seekWrap input[type="range"] {
+  flex: 1;
+}
+.subSelect {
+  border: 1px solid rgba(255,255,255,.2);
+  background: rgba(255,255,255,.08);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px;
 }
 
 /* ─── Settings overlay ─── */
@@ -476,3 +573,11 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
 }
 
 #keyIndicator.show { display: flex; }
+
+@media (max-width: 1100px) {
+  .railsWrap { grid-template-columns: 1fr; height: calc(100% - 210px); }
+  #chPanel { display: none; }
+  #chPanel.active { display: flex; }
+  .netflixHero { margin: 0 16px 12px; }
+  .netflixHeader { padding: 14px 16px 10px; }
+}
