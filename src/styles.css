@@ -476,3 +476,78 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
 }
 
 #keyIndicator.show { display: flex; }
+
+/* Channel Reorder Dialog */
+.reorderOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .75);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.reorderDialog {
+  background: #1a1a2e;
+  border: 1px solid rgba(255, 255, 255, .15);
+  border-radius: 12px;
+  padding: 28px 32px;
+  min-width: 300px;
+  max-width: 460px;
+  width: 90%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.reorderTitle {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: .04em;
+}
+
+.reorderChName {
+  font-size: .95rem;
+  color: #e94560;
+  font-weight: 600;
+}
+
+.reorderLabel {
+  font-size: .8rem;
+  color: #999;
+}
+
+.reorderInput {
+  background: #0f3460;
+  border: 1px solid rgba(255, 255, 255, .15);
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 1.3rem;
+  width: 100%;
+  box-sizing: border-box;
+  outline: none;
+}
+
+.reorderInput:focus { border-color: #e94560; }
+
+.reorderBtns {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.reorderBtn {
+  padding: 8px 22px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  font-size: .9rem;
+  font-weight: 600;
+}
+
+.reorderBtn.cancel { background: #333; color: #fff; }
+.reorderBtn.confirm { background: #e94560; color: #fff; }

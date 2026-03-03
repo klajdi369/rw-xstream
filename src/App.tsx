@@ -9,6 +9,7 @@ import { Category, Channel, LastChannel } from './types/player';
 const SAVE_KEY = 'xtream_tv_v4';
 const LAST_KEY = 'xtream_last_ch';
 const CHANNEL_PROXY_MEMORY_KEY = 'xtream_channel_proxy_memory_v1';
+const CHANNEL_ORDER_KEY = 'xtream_channel_order_v1';
 const CHANNEL_PROXY_MAX_VISITS = 6;
 const CHANNEL_ROW_JUMP = 8;
 
@@ -68,6 +69,11 @@ export default function App() {
   const [activeCatName, setActiveCatName] = React.useState('Channels');
   const [epg, setEpg] = React.useState<{ nowTitle: string; nowTime: string; progress: number; next: string } | null>(null);
 
+  // Channel reorder prompt
+  const [reorderOpen, setReorderOpen] = React.useState(false);
+  const [reorderInput, setReorderInput] = React.useState('');
+  const [reorderTarget, setReorderTarget] = React.useState<Channel | null>(null);
+
   // Channel toast (shows channel name on zap)
   const [channelToast, setChannelToast] = React.useState('');
   const toastTimerRef = React.useRef<any>(null);
@@ -121,6 +127,26 @@ export default function App() {
     localStorage.setItem(CHANNEL_PROXY_MEMORY_KEY, JSON.stringify(next));
   }, []);
 
+  const readChannelOrder = React.useCallback((): Record<string, number> => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(CHANNEL_ORDER_KEY) || '{}');
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch { return {}; }
+  }, []);
+
+  const applyChannelOrder = React.useCallback((list: Channel[], orderMap: Record<string, number>): Channel[] => {
+    const movers = list.filter((ch) => orderMap[String(ch.stream_id)] !== undefined);
+    if (!movers.length) return list;
+    const base = list.filter((ch) => orderMap[String(ch.stream_id)] === undefined);
+    movers.sort((a, b) => (orderMap[String(a.stream_id)] || 0) - (orderMap[String(b.stream_id)] || 0));
+    const result = [...base];
+    for (const mover of movers) {
+      const pos = clamp((orderMap[String(mover.stream_id)] || 1) - 1, 0, result.length);
+      result.splice(pos, 0, mover);
+    }
+    return result;
+  }, []);
+
   const showKeyIndicator = React.useCallback((key: string) => {
     const labels: Record<string, string> = {
       ArrowUp: '↑',
@@ -137,6 +163,8 @@ export default function App() {
       ChannelDown: 'CH-',
       MediaTrackPrevious: 'CH+',
       MediaTrackNext: 'CH-',
+      ColorF3Blue: 'BLUE',
+      Blue: 'BLUE',
     };
     const normalized = key === 'Spacebar' ? ' ' : key;
     const display = labels[normalized] || normalized;
@@ -614,15 +642,17 @@ export default function App() {
       cacheRef.current.set(id, list);
     }
 
+    const orderMap = readChannelOrder();
+    const ordered = applyChannelOrder(list, orderMap);
     const q = chQuery.trim().toLowerCase();
-    const visible = q ? list.filter((c) => String(c.name || '').toLowerCase().includes(q)) : list;
+    const visible = q ? ordered.filter((c) => String(c.name || '').toLowerCase().includes(q)) : ordered;
     setChannels(visible);
     if (resetSel) setSelCh(0);
 
     setHudTitle(cat.category_name || 'Channels');
     setHudSub(`${visible.length} channels`);
     wakeHud();
-  }, [apiUrl, chQuery, jget, wakeHud]);
+  }, [apiUrl, applyChannelOrder, chQuery, jget, readChannelOrder, wakeHud]);
 
   const connect = React.useCallback(async () => {
     if (!server || !user || !pass) {
@@ -681,13 +711,14 @@ export default function App() {
         const cat = filtered.find((c) => String(c.category_id) === String(last.catId)) || filtered[0];
         if (cat) {
           await loadCategory(cat, false);
-          const list = cacheRef.current.get(String(cat.category_id)) || [];
-          const idx = list.findIndex((c) => String(c.stream_id) === String(last.streamId));
+          const rawList = cacheRef.current.get(String(cat.category_id)) || [];
+          const orderedList = applyChannelOrder(rawList, readChannelOrder());
+          const idx = orderedList.findIndex((c) => String(c.stream_id) === String(last.streamId));
           const catIdx = filtered.findIndex((c) => String(c.category_id) === String(cat.category_id));
           setSelCat(catIdx >= 0 ? catIdx : 0);
           if (idx >= 0) {
             setSelCh(idx);
-            playChannel(list[idx]);
+            playChannel(orderedList[idx]);
             setResumeLabel(`▶ Resuming: ${last.name}`);
             setTimeout(() => setResumeLabel(''), 3200);
           }
@@ -712,7 +743,7 @@ export default function App() {
       setConnecting(false);
       setConnectProgress(0);
     }
-  }, [apiUrl, fmt, jget, loadCategory, pass, playChannel, remember, rememberProxyMode, server, useProxy, user, wakeHud]);
+  }, [apiUrl, applyChannelOrder, fmt, jget, loadCategory, pass, playChannel, readChannelOrder, remember, rememberProxyMode, server, useProxy, user, wakeHud]);
 
   React.useEffect(() => {
     const saved: any = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}');
@@ -769,6 +800,25 @@ export default function App() {
     }
   }, [channels, playChannel, showToast]);
 
+  const confirmReorder = React.useCallback(() => {
+    const num = parseInt(reorderInput, 10);
+    if (!reorderTarget || isNaN(num) || num < 1) return;
+    const orderMap = readChannelOrder();
+    orderMap[String(reorderTarget.stream_id)] = num;
+    localStorage.setItem(CHANNEL_ORDER_KEY, JSON.stringify(orderMap));
+    const id = activeCatRef.current;
+    const rawList = cacheRef.current.get(id) || [];
+    const ordered = applyChannelOrder(rawList, orderMap);
+    const q = chQuery.trim().toLowerCase();
+    const visible = q ? ordered.filter((c) => String(c.name || '').toLowerCase().includes(q)) : ordered;
+    setChannels(visible);
+    const newIdx = visible.findIndex((c) => String(c.stream_id) === String(reorderTarget.stream_id));
+    if (newIdx >= 0) setSelCh(newIdx);
+    setReorderOpen(false);
+    setReorderInput('');
+    setReorderTarget(null);
+  }, [applyChannelOrder, chQuery, readChannelOrder, reorderInput, reorderTarget]);
+
   const moveByChannelRow = React.useCallback((dir: 1 | -1) => {
     const step = CHANNEL_ROW_JUMP * dir;
     const n = clamp(selCh + step, 0, Math.max(0, channels.length - 1));
@@ -782,6 +832,13 @@ export default function App() {
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       showKeyIndicator(e.key);
+
+      if (reorderOpen) {
+        if (e.key === 'Escape') { e.preventDefault(); setReorderOpen(false); setReorderInput(''); }
+        if (e.key === 'Enter') { e.preventDefault(); confirmReorder(); }
+        return;
+      }
+
       if (settingsOpen) {
         if (e.key === 'Escape' || e.key === 'Backspace') setSettingsOpen(false);
         if (e.key === 'Enter') connect();
@@ -803,6 +860,26 @@ export default function App() {
       }
 
       wakeHud();
+
+      if (e.key === 'ColorF3Blue' || e.key === 'Blue' || e.key === 'VK_BLUE') {
+        e.preventDefault();
+        const target = sidebarOpen && focus === 'channels'
+          ? channels[selCh]
+          : (playingId ? channels.find((c) => String(c.stream_id) === playingId) : channels[selCh]);
+        if (target) {
+          setReorderTarget(target);
+          const orderMap = readChannelOrder();
+          const existingPos = orderMap[String(target.stream_id)];
+          if (existingPos !== undefined) {
+            setReorderInput(String(existingPos));
+          } else {
+            const curIdx = channels.findIndex((c) => String(c.stream_id) === String(target.stream_id));
+            setReorderInput(curIdx >= 0 ? String(curIdx + 1) : '1');
+          }
+          setReorderOpen(true);
+        }
+        return;
+      }
 
       if (!sidebarOpen) {
         if (['PageUp', 'ChannelUp', 'MediaTrackPrevious'].includes(e.key)) {
@@ -914,7 +991,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [categories, channels, connect, executeZap, focus, loadCategory, moveByChannelRow, playChannel, playingId, selCat, selCh, settingsOpen, showKeyIndicator, showToast, sidebarOpen, wakeHud, zapDigits]);
+  }, [categories, channels, confirmReorder, connect, executeZap, focus, loadCategory, moveByChannelRow, playChannel, playingId, readChannelOrder, reorderOpen, selCat, selCh, settingsOpen, showKeyIndicator, showToast, sidebarOpen, wakeHud, zapDigits]);
 
   return (
     <>
@@ -1004,6 +1081,30 @@ export default function App() {
         <div className="cMsg">{connectMsg}</div>
         <div className="progBar"><div className="progFill" style={{ width: `${connectProgress}%` }} /></div>
       </div>
+
+      {reorderOpen && reorderTarget && (
+        <div className="reorderOverlay" onClick={() => { setReorderOpen(false); setReorderInput(''); }}>
+          <div className="reorderDialog" onClick={(e) => e.stopPropagation()}>
+            <div className="reorderTitle">Set Channel Position</div>
+            <div className="reorderChName">{reorderTarget.name}</div>
+            <div className="reorderLabel">New position (1–{channels.length}):</div>
+            <input
+              className="reorderInput"
+              type="number"
+              min="1"
+              max={channels.length}
+              value={reorderInput}
+              onChange={(e) => setReorderInput(e.target.value)}
+              // eslint-disable-next-line jsx-a11y/no-autofocus
+              autoFocus
+            />
+            <div className="reorderBtns">
+              <button className="reorderBtn cancel" onClick={() => { setReorderOpen(false); setReorderInput(''); }}>Cancel</button>
+              <button className="reorderBtn confirm" onClick={confirmReorder}>Confirm</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
