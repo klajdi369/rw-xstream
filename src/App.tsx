@@ -858,24 +858,6 @@ export default function App() {
         } else if (e.key === 'ArrowDown' && active === reorderInputRef.current) {
           e.preventDefault();
           reorderCancelRef.current?.focus();
-        } else if (e.key === 'Tab' && !e.shiftKey && active === reorderInputRef.current) {
-          e.preventDefault();
-          reorderCancelRef.current?.focus();
-        } else if (e.key === 'Tab' && !e.shiftKey && active === reorderCancelRef.current) {
-          e.preventDefault();
-          reorderConfirmRef.current?.focus();
-        } else if (e.key === 'Tab' && !e.shiftKey && active === reorderConfirmRef.current) {
-          e.preventDefault();
-          reorderInputRef.current?.focus();
-        } else if (e.key === 'Tab' && e.shiftKey && active === reorderInputRef.current) {
-          e.preventDefault();
-          reorderConfirmRef.current?.focus();
-        } else if (e.key === 'Tab' && e.shiftKey && active === reorderCancelRef.current) {
-          e.preventDefault();
-          reorderInputRef.current?.focus();
-        } else if (e.key === 'Tab' && e.shiftKey && active === reorderConfirmRef.current) {
-          e.preventDefault();
-          reorderCancelRef.current?.focus();
         } else if (e.key === 'ArrowUp' && (active === reorderCancelRef.current || active === reorderConfirmRef.current)) {
           e.preventDefault();
           reorderInputRef.current?.focus();
