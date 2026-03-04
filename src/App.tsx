@@ -73,6 +73,10 @@ export default function App() {
   const [reorderOpen, setReorderOpen] = React.useState(false);
   const [reorderInput, setReorderInput] = React.useState('');
   const [reorderTarget, setReorderTarget] = React.useState<Channel | null>(null);
+  const useCustomOrderRef = React.useRef(true);
+  const reorderInputRef = React.useRef<HTMLInputElement>(null);
+  const reorderCancelRef = React.useRef<HTMLButtonElement>(null);
+  const reorderConfirmRef = React.useRef<HTMLButtonElement>(null);
 
   // Channel toast (shows channel name on zap)
   const [channelToast, setChannelToast] = React.useState('');
@@ -643,7 +647,7 @@ export default function App() {
     }
 
     const orderMap = readChannelOrder();
-    const ordered = applyChannelOrder(list, orderMap);
+    const ordered = useCustomOrderRef.current ? applyChannelOrder(list, orderMap) : list;
     const q = chQuery.trim().toLowerCase();
     const visible = q ? ordered.filter((c) => String(c.name || '').toLowerCase().includes(q)) : ordered;
     setChannels(visible);
@@ -819,6 +823,14 @@ export default function App() {
     setReorderTarget(null);
   }, [applyChannelOrder, chQuery, readChannelOrder, reorderInput, reorderTarget]);
 
+  React.useEffect(() => {
+    if (reorderOpen) {
+      // defer one tick so the dialog is in the DOM
+      const id = setTimeout(() => reorderInputRef.current?.focus(), 0);
+      return () => clearTimeout(id);
+    }
+  }, [reorderOpen]);
+
   const moveByChannelRow = React.useCallback((dir: 1 | -1) => {
     const step = CHANNEL_ROW_JUMP * dir;
     const n = clamp(selCh + step, 0, Math.max(0, channels.length - 1));
@@ -834,8 +846,28 @@ export default function App() {
       showKeyIndicator(e.key);
 
       if (reorderOpen) {
-        if (e.key === 'Escape') { e.preventDefault(); setReorderOpen(false); setReorderInput(''); }
-        if (e.key === 'Enter') { e.preventDefault(); confirmReorder(); }
+        const active = document.activeElement;
+        if (e.key === 'Escape' || e.key === 'Backspace') {
+          e.preventDefault();
+          setReorderOpen(false);
+          setReorderInput('');
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          if (active === reorderCancelRef.current) { setReorderOpen(false); setReorderInput(''); }
+          else confirmReorder();
+        } else if (e.key === 'ArrowDown' && active === reorderInputRef.current) {
+          e.preventDefault();
+          reorderCancelRef.current?.focus();
+        } else if (e.key === 'ArrowUp' && (active === reorderCancelRef.current || active === reorderConfirmRef.current)) {
+          e.preventDefault();
+          reorderInputRef.current?.focus();
+        } else if (e.key === 'ArrowRight' && active === reorderCancelRef.current) {
+          e.preventDefault();
+          reorderConfirmRef.current?.focus();
+        } else if (e.key === 'ArrowLeft' && active === reorderConfirmRef.current) {
+          e.preventDefault();
+          reorderCancelRef.current?.focus();
+        }
         return;
       }
 
@@ -863,20 +895,34 @@ export default function App() {
 
       if (e.key === 'ColorF3Blue' || e.key === 'Blue' || e.key === 'VK_BLUE') {
         e.preventDefault();
-        const target = sidebarOpen && focus === 'channels'
-          ? channels[selCh]
-          : (playingId ? channels.find((c) => String(c.stream_id) === playingId) : channels[selCh]);
-        if (target) {
-          setReorderTarget(target);
+        if (sidebarOpen && focus === 'channels') {
+          // Toggle between custom order and default alphabetical order
+          const newOrder = !useCustomOrderRef.current;
+          useCustomOrderRef.current = newOrder;
+          const id = activeCatRef.current;
+          const rawList = cacheRef.current.get(id) || [];
           const orderMap = readChannelOrder();
-          const existingPos = orderMap[String(target.stream_id)];
-          if (existingPos !== undefined) {
-            setReorderInput(String(existingPos));
-          } else {
-            const curIdx = channels.findIndex((c) => String(c.stream_id) === String(target.stream_id));
-            setReorderInput(curIdx >= 0 ? String(curIdx + 1) : '1');
+          const ordered = newOrder ? applyChannelOrder(rawList, orderMap) : rawList;
+          const q = chQuery.trim().toLowerCase();
+          const visible = q ? ordered.filter((c) => String(c.name || '').toLowerCase().includes(q)) : ordered;
+          setChannels(visible);
+          showToast(newOrder ? 'Custom order' : 'Alphabetical order');
+        } else {
+          const target = playingId
+            ? channels.find((c) => String(c.stream_id) === playingId)
+            : channels[selCh];
+          if (target) {
+            setReorderTarget(target);
+            const orderMap = readChannelOrder();
+            const existingPos = orderMap[String(target.stream_id)];
+            if (existingPos !== undefined) {
+              setReorderInput(String(existingPos));
+            } else {
+              const curIdx = channels.findIndex((c) => String(c.stream_id) === String(target.stream_id));
+              setReorderInput(curIdx >= 0 ? String(curIdx + 1) : '1');
+            }
+            setReorderOpen(true);
           }
-          setReorderOpen(true);
         }
         return;
       }
@@ -991,7 +1037,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [categories, channels, confirmReorder, connect, executeZap, focus, loadCategory, moveByChannelRow, playChannel, playingId, readChannelOrder, reorderOpen, selCat, selCh, settingsOpen, showKeyIndicator, showToast, sidebarOpen, wakeHud, zapDigits]);
+  }, [applyChannelOrder, categories, channels, chQuery, confirmReorder, connect, executeZap, focus, loadCategory, moveByChannelRow, playChannel, playingId, readChannelOrder, reorderOpen, selCat, selCh, settingsOpen, showKeyIndicator, showToast, sidebarOpen, wakeHud, zapDigits]);
 
   return (
     <>
@@ -1083,25 +1129,26 @@ export default function App() {
       </div>
 
       {reorderOpen && reorderTarget && (
-        <div className="reorderOverlay" onClick={() => { setReorderOpen(false); setReorderInput(''); }}>
-          <div className="reorderDialog" onClick={(e) => e.stopPropagation()}>
+        <div className="reorderOverlay">
+          <div className="reorderDialog">
             <div className="reorderTitle">Set Channel Position</div>
             <div className="reorderChName">{reorderTarget.name}</div>
             <div className="reorderLabel">New position (1–{channels.length}):</div>
             <input
+              ref={reorderInputRef}
               className="reorderInput"
               type="number"
+              inputMode="numeric"
               min="1"
               max={channels.length}
               value={reorderInput}
               onChange={(e) => setReorderInput(e.target.value)}
-              // eslint-disable-next-line jsx-a11y/no-autofocus
-              autoFocus
             />
             <div className="reorderBtns">
-              <button className="reorderBtn cancel" onClick={() => { setReorderOpen(false); setReorderInput(''); }}>Cancel</button>
-              <button className="reorderBtn confirm" onClick={confirmReorder}>Confirm</button>
+              <button ref={reorderCancelRef} className="reorderBtn cancel" onClick={() => { setReorderOpen(false); setReorderInput(''); }}>Cancel</button>
+              <button ref={reorderConfirmRef} className="reorderBtn confirm" onClick={confirmReorder}>Confirm</button>
             </div>
+            <div className="reorderHint">OK · Confirm &nbsp;·&nbsp; BACK · Cancel &nbsp;·&nbsp; ↓ to buttons</div>
           </div>
         </div>
       )}

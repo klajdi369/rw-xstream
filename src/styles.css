@@ -551,3 +551,13 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
 
 .reorderBtn.cancel { background: #333; color: #fff; }
 .reorderBtn.confirm { background: #e94560; color: #fff; }
+.reorderBtn:focus { outline: 3px solid #e94560; outline-offset: 3px; }
+.reorderBtn.cancel:focus { outline-color: #aaa; }
+
+.reorderHint {
+  font-size: .72rem;
+  color: #555;
+  text-align: center;
+  margin-top: 2px;
+  letter-spacing: .02em;
+}
