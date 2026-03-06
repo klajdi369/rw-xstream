@@ -10,6 +10,7 @@ const SAVE_KEY = 'xtream_tv_v4';
 const LAST_KEY = 'xtream_last_ch';
 const CHANNEL_PROXY_MEMORY_KEY = 'xtream_channel_proxy_memory_v1';
 const CHANNEL_ORDER_KEY = 'xtream_channel_custom_order_v1';
+const CHANNEL_ORDER_MODE_KEY = 'xtream_channel_order_mode_v1';
 const CHANNEL_PROXY_MAX_VISITS = 6;
 const CHANNEL_ROW_JUMP = 8;
 
@@ -61,7 +62,7 @@ export default function App() {
   const [categories, setCategories] = React.useState<Category[]>([]);
   const [channels, setChannels] = React.useState<Channel[]>([]);
   const [channelOrderMap, setChannelOrderMap] = React.useState<Record<string, Record<string, number>>>({});
-  const [customOrderInList, setCustomOrderInList] = React.useState(false);
+  const [customOrderInList, setCustomOrderInList] = React.useState(true);
   const [orderPromptOpen, setOrderPromptOpen] = React.useState(false);
   const [orderPromptDigits, setOrderPromptDigits] = React.useState('');
   const [orderPromptReplaceOnDigit, setOrderPromptReplaceOnDigit] = React.useState(false);
@@ -136,6 +137,22 @@ export default function App() {
   const writeChannelOrderMap = React.useCallback((next: Record<string, Record<string, number>>) => {
     localStorage.setItem(CHANNEL_ORDER_KEY, JSON.stringify(next));
     setChannelOrderMap(next);
+  }, []);
+
+
+  const readChannelOrderMode = React.useCallback(() => {
+    try {
+      const raw = localStorage.getItem(CHANNEL_ORDER_MODE_KEY);
+      if (raw == null) return true;
+      return raw !== 'default';
+    } catch {
+      return true;
+    }
+  }, []);
+
+  const writeChannelOrderMode = React.useCallback((isCustom: boolean) => {
+    localStorage.setItem(CHANNEL_ORDER_MODE_KEY, isCustom ? 'custom' : 'default');
+    setCustomOrderInList(isCustom);
   }, []);
 
   const sortWithCustomOrder = React.useCallback((list: Channel[], catId: string, enabled: boolean) => {
@@ -770,6 +787,7 @@ export default function App() {
     else setSettingsOpen(true);
 
     setChannelOrderMap(readChannelOrderMap());
+    setCustomOrderInList(readChannelOrderMode());
 
     return () => {
       stopPlayback();
@@ -898,11 +916,9 @@ export default function App() {
       if (isOrderButton) {
         e.preventDefault();
         if (sidebarOpen && focus === 'channels') {
-          setCustomOrderInList((v) => {
-            const next = !v;
-            setHudSub(next ? 'Channel list: custom order' : 'Channel list: default order');
-            return next;
-          });
+          const next = !customOrderInList;
+          writeChannelOrderMode(next);
+          setHudSub(next ? 'Channel list: custom order' : 'Channel list: default order');
           return;
         }
 
@@ -1036,7 +1052,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [categories, channelList, channelOrderMap, channels, connect, customOrderedChannels, executeZap, focus, loadCategory, moveByChannelRow, orderPromptDigits, orderPromptOpen, orderPromptReplaceOnDigit, orderPromptTarget, playChannel, playingId, selCat, selCh, settingsOpen, showKeyIndicator, showToast, sidebarOpen, wakeHud, writeChannelOrderMap, zapDigits]);
+  }, [categories, channelList, channelOrderMap, channels, connect, customOrderInList, customOrderedChannels, executeZap, focus, loadCategory, moveByChannelRow, orderPromptDigits, orderPromptOpen, orderPromptReplaceOnDigit, orderPromptTarget, playChannel, playingId, selCat, selCh, settingsOpen, showKeyIndicator, showToast, sidebarOpen, wakeHud, writeChannelOrderMap, writeChannelOrderMode, zapDigits]);
 
   return (
     <>
