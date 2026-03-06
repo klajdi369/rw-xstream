@@ -158,16 +158,44 @@ export default function App() {
   const sortWithCustomOrder = React.useCallback((list: Channel[], catId: string, enabled: boolean) => {
     if (!enabled) return list;
     const orders = channelOrderMap[catId] || {};
-    return list
-      .map((ch, index) => ({ ch, index, order: Number(orders[String(ch.stream_id)]) }))
-      .sort((a, b) => {
-        const aHas = Number.isFinite(a.order) && a.order > 0;
-        const bHas = Number.isFinite(b.order) && b.order > 0;
-        if (aHas && bHas && a.order !== b.order) return a.order - b.order;
-        if (aHas !== bHas) return aHas ? -1 : 1;
-        return a.index - b.index;
-      })
-      .map((v) => v.ch);
+    const total = list.length;
+    if (!total) return list;
+
+    const withMeta = list.map((ch, index) => {
+      const raw = Number(orders[String(ch.stream_id)]);
+      const hasOrder = Number.isFinite(raw) && raw > 0;
+      const order = hasOrder ? clamp(Math.floor(raw), 1, total) : 0;
+      return { ch, index, hasOrder, order };
+    });
+
+    const pinned = withMeta
+      .filter((item) => item.hasOrder)
+      .sort((a, b) => (a.order - b.order) || (a.index - b.index));
+
+    const unpinned = withMeta.filter((item) => !item.hasOrder);
+    const result: Channel[] = new Array(total);
+    const used = new Set<number>();
+
+    for (const item of pinned) {
+      let pos = item.order - 1;
+      while (pos < total && used.has(pos)) pos += 1;
+      if (pos >= total) {
+        pos = 0;
+        while (pos < total && used.has(pos)) pos += 1;
+      }
+      if (pos >= total) break;
+      result[pos] = item.ch;
+      used.add(pos);
+    }
+
+    let u = 0;
+    for (let i = 0; i < total; i += 1) {
+      if (used.has(i)) continue;
+      result[i] = unpinned[u].ch;
+      u += 1;
+    }
+
+    return result;
   }, [channelOrderMap]);
 
   const customOrderedChannels = React.useMemo(() => sortWithCustomOrder(channels, activeCatRef.current || '', true), [channels, sortWithCustomOrder]);
