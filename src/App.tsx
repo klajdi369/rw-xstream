@@ -9,6 +9,7 @@ import { Category, Channel, LastChannel } from './types/player';
 const SAVE_KEY = 'xtream_tv_v4';
 const LAST_KEY = 'xtream_last_ch';
 const CHANNEL_PROXY_MEMORY_KEY = 'xtream_channel_proxy_memory_v1';
+const CHANNEL_ORDER_KEY = 'xtream_channel_custom_order_v1';
 const CHANNEL_PROXY_MAX_VISITS = 6;
 const CHANNEL_ROW_JUMP = 8;
 
@@ -59,6 +60,11 @@ export default function App() {
   const [allCategories, setAllCategories] = React.useState<Category[]>([]);
   const [categories, setCategories] = React.useState<Category[]>([]);
   const [channels, setChannels] = React.useState<Channel[]>([]);
+  const [channelOrderMap, setChannelOrderMap] = React.useState<Record<string, Record<string, number>>>({});
+  const [customOrderInList, setCustomOrderInList] = React.useState(false);
+  const [orderPromptOpen, setOrderPromptOpen] = React.useState(false);
+  const [orderPromptDigits, setOrderPromptDigits] = React.useState('');
+  const [orderPromptTarget, setOrderPromptTarget] = React.useState<{ streamId: string; name: string; catId: string } | null>(null);
   const [selCat, setSelCat] = React.useState(0);
   const [selCh, setSelCh] = React.useState(0);
   const [catQuery, setCatQuery] = React.useState('');
@@ -116,6 +122,41 @@ export default function App() {
       return {};
     }
   }, []);
+
+  const readChannelOrderMap = React.useCallback(() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(CHANNEL_ORDER_KEY) || '{}');
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }, []);
+
+  const writeChannelOrderMap = React.useCallback((next: Record<string, Record<string, number>>) => {
+    localStorage.setItem(CHANNEL_ORDER_KEY, JSON.stringify(next));
+    setChannelOrderMap(next);
+  }, []);
+
+  const sortWithCustomOrder = React.useCallback((list: Channel[], catId: string, enabled: boolean) => {
+    if (!enabled) return list;
+    const orders = channelOrderMap[catId] || {};
+    return list
+      .map((ch, index) => ({ ch, index, order: Number(orders[String(ch.stream_id)]) }))
+      .sort((a, b) => {
+        const aHas = Number.isFinite(a.order) && a.order > 0;
+        const bHas = Number.isFinite(b.order) && b.order > 0;
+        if (aHas && bHas && a.order !== b.order) return a.order - b.order;
+        if (aHas !== bHas) return aHas ? -1 : 1;
+        return a.index - b.index;
+      })
+      .map((v) => v.ch);
+  }, [channelOrderMap]);
+
+  const customOrderedChannels = React.useMemo(() => sortWithCustomOrder(channels, activeCatRef.current || '', true), [channels, sortWithCustomOrder]);
+  const channelList = React.useMemo(
+    () => sortWithCustomOrder(channels, activeCatRef.current || '', customOrderInList),
+    [channels, customOrderInList, sortWithCustomOrder],
+  );
 
   const writeChannelProxyMemory = React.useCallback((next: Record<string, { useProxy: boolean; visits: number }>) => {
     localStorage.setItem(CHANNEL_PROXY_MEMORY_KEY, JSON.stringify(next));
@@ -727,6 +768,8 @@ export default function App() {
     if (saved.server && saved.user && saved.pass) setTimeout(() => connect(), 30);
     else setSettingsOpen(true);
 
+    setChannelOrderMap(readChannelOrderMap());
+
     return () => {
       stopPlayback();
       clearTimeout(hudTimerRef.current);
@@ -759,29 +802,68 @@ export default function App() {
   // Number zap: type digits to jump to a channel number
   const executeZap = React.useCallback((digits: string) => {
     const num = parseInt(digits, 10);
-    if (isNaN(num) || num < 1 || !channels.length) return;
-    const idx = clamp(num - 1, 0, channels.length - 1);
+    if (isNaN(num) || num < 1 || !customOrderedChannels.length) return;
+    const idx = clamp(num - 1, 0, customOrderedChannels.length - 1);
     setSelCh(idx);
-    const ch = channels[idx];
+    const ch = customOrderedChannels[idx];
     if (ch) {
       playChannel(ch);
       showToast(ch.name || `Channel ${num}`);
     }
-  }, [channels, playChannel, showToast]);
+  }, [customOrderedChannels, playChannel, showToast]);
 
   const moveByChannelRow = React.useCallback((dir: 1 | -1) => {
+    const navChannels = sidebarOpen && focus === 'channels' ? channelList : customOrderedChannels;
     const step = CHANNEL_ROW_JUMP * dir;
-    const n = clamp(selCh + step, 0, Math.max(0, channels.length - 1));
+    const n = clamp(selCh + step, 0, Math.max(0, navChannels.length - 1));
     setSelCh(n);
-    if (channels[n]) {
-      playChannel(channels[n]);
-      showToast(channels[n].name || 'Channel');
+    if (navChannels[n]) {
+      playChannel(navChannels[n]);
+      showToast(navChannels[n].name || 'Channel');
     }
-  }, [channels, playChannel, selCh, showToast]);
+  }, [channelList, customOrderedChannels, focus, playChannel, selCh, showToast, sidebarOpen]);
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       showKeyIndicator(e.key);
+      const isOrderButton = ['ColorF3Blue', 'Blue', 'NumLock'].includes(e.key);
+
+      if (orderPromptOpen) {
+        if (e.key >= '0' && e.key <= '9') {
+          e.preventDefault();
+          setOrderPromptDigits((v) => (v + e.key).slice(0, 4));
+          return;
+        }
+        if (e.key === 'Backspace') {
+          e.preventDefault();
+          setOrderPromptDigits((v) => v.slice(0, -1));
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setOrderPromptOpen(false);
+          setOrderPromptDigits('');
+          setOrderPromptTarget(null);
+          return;
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const order = parseInt(orderPromptDigits, 10);
+          if (!isNaN(order) && order > 0 && orderPromptTarget) {
+            const next = { ...channelOrderMap };
+            const catId = orderPromptTarget.catId || activeCatRef.current || '';
+            next[catId] = { ...(next[catId] || {}), [orderPromptTarget.streamId]: order };
+            writeChannelOrderMap(next);
+            setHudSub(`Set ${orderPromptTarget.name} to order #${order}`);
+            wakeHud();
+          }
+          setOrderPromptOpen(false);
+          setOrderPromptDigits('');
+          setOrderPromptTarget(null);
+          return;
+        }
+      }
+
       if (settingsOpen) {
         if (e.key === 'Escape' || e.key === 'Backspace') setSettingsOpen(false);
         if (e.key === 'Enter') connect();
@@ -804,6 +886,36 @@ export default function App() {
 
       wakeHud();
 
+      if (isOrderButton) {
+        e.preventDefault();
+        if (sidebarOpen && focus === 'channels') {
+          setCustomOrderInList((v) => {
+            const next = !v;
+            setHudSub(next ? 'Channel list: custom order' : 'Channel list: default order');
+            return next;
+          });
+          return;
+        }
+
+        const target = (sidebarOpen ? channelList[selCh] : null)
+          || channels.find((c) => String(c.stream_id) === playingId)
+          || customOrderedChannels[selCh]
+          || customOrderedChannels[0];
+
+        if (target) {
+          const catId = activeCatRef.current || '';
+          const prevOrder = channelOrderMap[catId]?.[String(target.stream_id)];
+          setOrderPromptTarget({
+            streamId: String(target.stream_id),
+            name: target.name || 'Channel',
+            catId,
+          });
+          setOrderPromptDigits(prevOrder ? String(prevOrder) : '');
+          setOrderPromptOpen(true);
+        }
+        return;
+      }
+
       if (!sidebarOpen) {
         if (['PageUp', 'ChannelUp', 'MediaTrackPrevious'].includes(e.key)) {
           e.preventDefault();
@@ -818,8 +930,8 @@ export default function App() {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           // Snap selection to the currently playing channel
-          if (playingId && channels.length) {
-            const playIdx = channels.findIndex((c) => String(c.stream_id) === playingId);
+          if (playingId && customOrderedChannels.length) {
+            const playIdx = customOrderedChannels.findIndex((c) => String(c.stream_id) === playingId);
             if (playIdx >= 0) setSelCh(playIdx);
           }
           setSidebarOpen(true);
@@ -828,21 +940,21 @@ export default function App() {
         }
         if (e.key === 'ArrowUp') {
           e.preventDefault();
-          const n = clamp(selCh - 1, 0, Math.max(0, channels.length - 1));
+          const n = clamp(selCh - 1, 0, Math.max(0, customOrderedChannels.length - 1));
           setSelCh(n);
-          if (channels[n]) {
-            playChannel(channels[n]);
-            showToast(channels[n].name || 'Channel');
+          if (customOrderedChannels[n]) {
+            playChannel(customOrderedChannels[n]);
+            showToast(customOrderedChannels[n].name || 'Channel');
           }
           return;
         }
         if (e.key === 'ArrowDown') {
           e.preventDefault();
-          const n = clamp(selCh + 1, 0, Math.max(0, channels.length - 1));
+          const n = clamp(selCh + 1, 0, Math.max(0, customOrderedChannels.length - 1));
           setSelCh(n);
-          if (channels[n]) {
-            playChannel(channels[n]);
-            showToast(channels[n].name || 'Channel');
+          if (customOrderedChannels[n]) {
+            playChannel(customOrderedChannels[n]);
+            showToast(customOrderedChannels[n].name || 'Channel');
           }
         }
         return;
@@ -887,7 +999,7 @@ export default function App() {
           const next = clamp(selCat - 1, 0, Math.max(0, categories.length - 1));
           setSelCat(next);
         } else {
-          setSelCh((v) => clamp(v - 1, 0, Math.max(0, channels.length - 1)));
+          setSelCh((v) => clamp(v - 1, 0, Math.max(0, channelList.length - 1)));
         }
       }
       if (e.key === 'ArrowDown') {
@@ -896,7 +1008,7 @@ export default function App() {
           const next = clamp(selCat + 1, 0, Math.max(0, categories.length - 1));
           setSelCat(next);
         } else {
-          setSelCh((v) => clamp(v + 1, 0, Math.max(0, channels.length - 1)));
+          setSelCh((v) => clamp(v + 1, 0, Math.max(0, channelList.length - 1)));
         }
       }
       if (e.key === 'Enter' || e.key === ' ') {
@@ -905,8 +1017,8 @@ export default function App() {
           const cat = categories[selCat];
           if (cat) loadCategory(cat, true);
           setFocus('channels');
-        } else if (channels[selCh]) {
-          playChannel(channels[selCh]);
+        } else if (channelList[selCh]) {
+          playChannel(channelList[selCh]);
           setSidebarOpen(false);
         }
       }
@@ -914,7 +1026,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [categories, channels, connect, executeZap, focus, loadCategory, moveByChannelRow, playChannel, playingId, selCat, selCh, settingsOpen, showKeyIndicator, showToast, sidebarOpen, wakeHud, zapDigits]);
+  }, [categories, channelList, channelOrderMap, channels, connect, customOrderedChannels, executeZap, focus, loadCategory, moveByChannelRow, orderPromptDigits, orderPromptOpen, orderPromptTarget, playChannel, playingId, selCat, selCh, settingsOpen, showKeyIndicator, showToast, sidebarOpen, wakeHud, writeChannelOrderMap, zapDigits]);
 
   return (
     <>
@@ -942,7 +1054,7 @@ export default function App() {
         open={sidebarOpen}
         focus={focus}
         categories={categories}
-        channels={channels}
+        channels={channelList}
         selectedCategory={selCat}
         selectedChannel={selCh}
         categoryQuery={catQuery}
@@ -959,12 +1071,21 @@ export default function App() {
         }}
         onPickChannel={(i) => {
           setSelCh(i);
-          if (channels[i]) {
-            playChannel(channels[i]);
+          if (channelList[i]) {
+            playChannel(channelList[i]);
             setSidebarOpen(false);
           }
         }}
       />
+
+      <div id="orderPrompt" className={orderPromptOpen ? 'show' : ''}>
+        <div className="orderCard">
+          <div className="orderTitle">Set channel order</div>
+          <div className="orderName">{orderPromptTarget?.name || 'Channel'}</div>
+          <div className="orderDigits">{orderPromptDigits || '—'}</div>
+          <div className="orderHelp">Use number keys, OK to save, Back to delete, Exit to cancel</div>
+        </div>
+      </div>
 
       <Hud title={hudTitle} subtitle={hudSub} hidden={hudHidden || settingsOpen} onOpenSettings={() => setSettingsOpen(true)} keyIndicator={keyIndicator} epg={epg} />
 

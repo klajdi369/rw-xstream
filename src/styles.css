@@ -476,3 +476,46 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
 }
 
 #keyIndicator.show { display: flex; }
+
+/* ─── Custom channel order dialog ─── */
+#orderPrompt {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, .55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+#orderPrompt.show { display: flex; }
+.orderCard {
+  width: min(540px, 92vw);
+  background: rgba(9, 12, 18, .94);
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 16px;
+  padding: 20px;
+  text-align: center;
+  box-shadow: 0 12px 44px rgba(0, 0, 0, .55);
+}
+.orderTitle { font-size: 20px; font-weight: 800; margin-bottom: 8px; }
+.orderName {
+  color: rgba(232, 240, 250, .75);
+  font-size: 16px;
+  margin-bottom: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.orderDigits {
+  font-size: 44px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  font-variant-numeric: tabular-nums;
+  margin: 8px 0 12px;
+}
+.orderHelp {
+  color: rgba(232, 240, 250, .62);
+  font-size: 14px;
+}
