@@ -13,6 +13,7 @@ type Props = {
   channelQuery: string;
   playingId: string | null;
   activeCategoryName: string;
+  channelOrderModeLabel: string;
   onCategoryQuery: (value: string) => void;
   onChannelQuery: (value: string) => void;
   onPickCategory: (index: number) => void;
@@ -22,7 +23,7 @@ type Props = {
 export function Sidebar(props: Props) {
   const {
     open, focus, categories, channels, selectedCategory, selectedChannel,
-    categoryQuery, channelQuery, playingId, activeCategoryName,
+    categoryQuery, channelQuery, playingId, activeCategoryName, channelOrderModeLabel,
     onCategoryQuery, onChannelQuery, onPickCategory, onPickChannel,
   } = props;
 
@@ -59,7 +60,10 @@ export function Sidebar(props: Props) {
       <div className={`panel ${focus === 'channels' ? 'active' : ''}`} id="chPanel">
         <div className="panelHead">
           <span className="ttl">{activeCategoryName || 'Channels'}</span>
-          <span className="badge">{channels.length}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span className="badge">{channelOrderModeLabel}</span>
+            <span className="badge">{channels.length}</span>
+          </div>
         </div>
         <div className="searchWrap">
           <input

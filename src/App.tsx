@@ -64,6 +64,7 @@ export default function App() {
   const [customOrderInList, setCustomOrderInList] = React.useState(false);
   const [orderPromptOpen, setOrderPromptOpen] = React.useState(false);
   const [orderPromptDigits, setOrderPromptDigits] = React.useState('');
+  const [orderPromptReplaceOnDigit, setOrderPromptReplaceOnDigit] = React.useState(false);
   const [orderPromptTarget, setOrderPromptTarget] = React.useState<{ streamId: string; name: string; catId: string } | null>(null);
   const [selCat, setSelCat] = React.useState(0);
   const [selCh, setSelCh] = React.useState(0);
@@ -831,18 +832,25 @@ export default function App() {
       if (orderPromptOpen) {
         if (e.key >= '0' && e.key <= '9') {
           e.preventDefault();
-          setOrderPromptDigits((v) => (v + e.key).slice(0, 4));
+          setOrderPromptDigits((v) => (orderPromptReplaceOnDigit ? e.key : (v + e.key).slice(0, 4)));
+          setOrderPromptReplaceOnDigit(false);
           return;
         }
         if (e.key === 'Backspace') {
           e.preventDefault();
-          setOrderPromptDigits((v) => v.slice(0, -1));
+          if (orderPromptReplaceOnDigit) {
+            setOrderPromptDigits('');
+            setOrderPromptReplaceOnDigit(false);
+          } else {
+            setOrderPromptDigits((v) => v.slice(0, -1));
+          }
           return;
         }
         if (e.key === 'Escape') {
           e.preventDefault();
           setOrderPromptOpen(false);
           setOrderPromptDigits('');
+          setOrderPromptReplaceOnDigit(false);
           setOrderPromptTarget(null);
           return;
         }
@@ -859,6 +867,7 @@ export default function App() {
           }
           setOrderPromptOpen(false);
           setOrderPromptDigits('');
+          setOrderPromptReplaceOnDigit(false);
           setOrderPromptTarget(null);
           return;
         }
@@ -911,6 +920,7 @@ export default function App() {
             catId,
           });
           setOrderPromptDigits(prevOrder ? String(prevOrder) : '');
+          setOrderPromptReplaceOnDigit(Boolean(prevOrder));
           setOrderPromptOpen(true);
         }
         return;
@@ -1026,7 +1036,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [categories, channelList, channelOrderMap, channels, connect, customOrderedChannels, executeZap, focus, loadCategory, moveByChannelRow, orderPromptDigits, orderPromptOpen, orderPromptTarget, playChannel, playingId, selCat, selCh, settingsOpen, showKeyIndicator, showToast, sidebarOpen, wakeHud, writeChannelOrderMap, zapDigits]);
+  }, [categories, channelList, channelOrderMap, channels, connect, customOrderedChannels, executeZap, focus, loadCategory, moveByChannelRow, orderPromptDigits, orderPromptOpen, orderPromptReplaceOnDigit, orderPromptTarget, playChannel, playingId, selCat, selCh, settingsOpen, showKeyIndicator, showToast, sidebarOpen, wakeHud, writeChannelOrderMap, zapDigits]);
 
   return (
     <>
@@ -1061,6 +1071,7 @@ export default function App() {
         channelQuery={chQuery}
         playingId={playingId}
         activeCategoryName={activeCatName}
+        channelOrderModeLabel={customOrderInList ? 'Custom' : 'Default'}
         onCategoryQuery={setCatQuery}
         onChannelQuery={setChQuery}
         onPickCategory={async (i) => {
@@ -1083,7 +1094,7 @@ export default function App() {
           <div className="orderTitle">Set channel order</div>
           <div className="orderName">{orderPromptTarget?.name || 'Channel'}</div>
           <div className="orderDigits">{orderPromptDigits || '—'}</div>
-          <div className="orderHelp">Use number keys, OK to save, Back to delete, Exit to cancel</div>
+          <div className="orderHelp">Use number keys, OK to save (empty = no change), Back to edit</div>
         </div>
       </div>
 
