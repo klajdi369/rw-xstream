@@ -13,6 +13,7 @@ const CHANNEL_ORDER_KEY = 'xtream_channel_custom_order_v1';
 const CHANNEL_ORDER_MODE_KEY = 'xtream_channel_order_mode_v1';
 const CHANNEL_PROXY_MAX_VISITS = 6;
 const CHANNEL_ROW_JUMP = 8;
+const HIDE_CATEGORIES = true;
 
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 
@@ -738,9 +739,10 @@ export default function App() {
       const all = (Array.isArray(raw) ? raw : []) as Category[];
       all.sort((a, b) => Number(a.category_id) - Number(b.category_id));
       const filtered = all.filter((c) => String(c.category_name || '').toUpperCase().includes('ALBANIA'));
+      const scopedCategories = HIDE_CATEGORIES ? filtered.slice(0, 1) : filtered;
 
-      setAllCategories(filtered);
-      setCategories(filtered);
+      setAllCategories(scopedCategories);
+      setCategories(scopedCategories);
       setSelCat(0);
       setChQuery('');
       cacheRef.current.clear();
@@ -759,19 +761,19 @@ export default function App() {
       setConnectProgress(70);
       setSettingsProgress(70);
 
-      if (filtered[0]) await loadCategory(filtered[0], true);
+      if (scopedCategories[0]) await loadCategory(scopedCategories[0], true);
 
       setConnectProgress(90);
       setSettingsProgress(90);
 
       const last: LastChannel | null = JSON.parse(localStorage.getItem(LAST_KEY) || 'null');
       if (last && remember) {
-        const cat = filtered.find((c) => String(c.category_id) === String(last.catId)) || filtered[0];
+        const cat = scopedCategories.find((c) => String(c.category_id) === String(last.catId)) || scopedCategories[0];
         if (cat) {
           await loadCategory(cat, false);
           const list = cacheRef.current.get(String(cat.category_id)) || [];
           const idx = list.findIndex((c) => String(c.stream_id) === String(last.streamId));
-          const catIdx = filtered.findIndex((c) => String(c.category_id) === String(cat.category_id));
+          const catIdx = scopedCategories.findIndex((c) => String(c.category_id) === String(cat.category_id));
           setSelCat(catIdx >= 0 ? catIdx : 0);
           if (idx >= 0) {
             setSelCh(idx);
@@ -785,7 +787,7 @@ export default function App() {
       setConnectProgress(100);
       setSettingsProgress(100);
       setSettingsOpen(false);
-      setMsg(`Connected! ${filtered.length} categories.`);
+      setMsg(`Connected! ${scopedCategories.length} categories.`);
       setMsgIsError(false);
       setHudTitle('Ready');
       setHudSub('OK to open channel list');
@@ -835,6 +837,12 @@ export default function App() {
   }, [hudHidden, settingsOpen, sidebarOpen]);
 
   React.useEffect(() => {
+    if (HIDE_CATEGORIES) {
+      setCategories(allCategories);
+      setSelCat(0);
+      return;
+    }
+
     const q = catQuery.trim().toLowerCase();
     const filtered = q ? allCategories.filter((c) => String(c.category_name || '').toLowerCase().includes(q)) : allCategories;
     setCategories(filtered);
@@ -1033,16 +1041,16 @@ export default function App() {
 
       if (e.key === 'Escape' || e.key === 'Backspace') {
         e.preventDefault();
-        if (focus === 'categories') setFocus('channels');
+        if (!HIDE_CATEGORIES && focus === 'categories') setFocus('channels');
         else setSidebarOpen(false);
         return;
       }
 
-      if (e.key === 'ArrowLeft' && focus === 'channels') {
+      if (!HIDE_CATEGORIES && e.key === 'ArrowLeft' && focus === 'channels') {
         e.preventDefault();
         return setFocus('categories');
       }
-      if (e.key === 'ArrowRight' && focus === 'categories') {
+      if (!HIDE_CATEGORIES && e.key === 'ArrowRight' && focus === 'categories') {
         e.preventDefault();
         return setFocus('channels');
       }
@@ -1125,6 +1133,7 @@ export default function App() {
         open={sidebarOpen}
         focus={focus}
         categories={categories}
+        showCategories={!HIDE_CATEGORIES}
         channels={channelList}
         selectedCategory={selCat}
         selectedChannel={selCh}
@@ -1133,9 +1142,10 @@ export default function App() {
         playingId={playingId}
         activeCategoryName={activeCatName}
         channelOrderModeLabel={customOrderInList ? 'Custom' : 'Default'}
-        onCategoryQuery={setCatQuery}
+        onCategoryQuery={(value) => { if (!HIDE_CATEGORIES) setCatQuery(value); }}
         onChannelQuery={setChQuery}
         onPickCategory={async (i) => {
+          if (HIDE_CATEGORIES) return;
           setSelCat(i);
           const cat = categories[i];
           if (cat) await loadCategory(cat, true);
