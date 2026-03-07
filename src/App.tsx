@@ -93,6 +93,7 @@ export default function App() {
   const orderKeySeqRef = React.useRef<{ count: number; until: number }>({ count: 0, until: 0 });
 
   const cacheRef = React.useRef<Map<string, Channel[]>>(new Map());
+  const allCategoriesRef = React.useRef<Category[]>([]);
   const activeCatRef = React.useRef<string>('');
   const hudTimerRef = React.useRef<any>(null);
   const playTokenRef = React.useRef(0);
@@ -745,8 +746,10 @@ export default function App() {
       const filtered = all.filter((c) => String(c.category_name || '').toUpperCase().includes('ALBANIA'));
       const scopedCategories = HIDE_CATEGORIES ? filtered.slice(0, 1) : filtered;
 
-      setAllCategories(filtered);
-      setCategories(HIDE_CATEGORIES && !showAllCategories ? scopedCategories : filtered);
+      allCategoriesRef.current = filtered;
+      const visibleCategories = HIDE_CATEGORIES && !showAllCategories ? scopedCategories : filtered;
+      setAllCategories(visibleCategories);
+      setCategories(visibleCategories);
       setSelCat(0);
       setChQuery('');
       cacheRef.current.clear();
@@ -791,7 +794,7 @@ export default function App() {
       setConnectProgress(100);
       setSettingsProgress(100);
       setSettingsOpen(false);
-      const visibleCategoryCount = HIDE_CATEGORIES && !showAllCategories ? scopedCategories.length : filtered.length;
+      const visibleCategoryCount = visibleCategories.length;
       setMsg(`Connected! ${visibleCategoryCount} categories.`);
       setMsgIsError(false);
       setHudTitle('Ready');
@@ -842,17 +845,22 @@ export default function App() {
   }, [hudHidden, settingsOpen, sidebarOpen]);
 
   React.useEffect(() => {
+    const source = allCategoriesRef.current;
+
     if (HIDE_CATEGORIES && !showAllCategories) {
-      setCategories(allCategories.slice(0, 1));
+      const single = source.slice(0, 1);
+      setAllCategories(single);
+      setCategories(single);
       setSelCat(0);
       return;
     }
 
     const q = catQuery.trim().toLowerCase();
-    const filtered = q ? allCategories.filter((c) => String(c.category_name || '').toLowerCase().includes(q)) : allCategories;
+    const filtered = q ? source.filter((c) => String(c.category_name || '').toLowerCase().includes(q)) : source;
+    setAllCategories(filtered);
     setCategories(filtered);
     setSelCat(0);
-  }, [allCategories, catQuery, showAllCategories]);
+  }, [catQuery, showAllCategories]);
 
   React.useEffect(() => {
     const cat = categories[selCat];
@@ -985,8 +993,15 @@ export default function App() {
             setShowAllCategories(unlocking);
             setHudSub(unlocking ? 'Category list unlocked' : 'Category list hidden');
             if (unlocking) {
+              const source = allCategoriesRef.current;
+              setAllCategories(source);
+              setCategories(source);
               setFocus('categories');
             } else {
+              const single = allCategoriesRef.current.slice(0, 1);
+              setAllCategories(single);
+              setCategories(single);
+              setCatQuery('');
               setFocus('channels');
               setSelCat(0);
             }
