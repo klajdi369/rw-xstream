@@ -6,7 +6,6 @@ type Props = {
   open: boolean;
   focus: 'categories' | 'channels';
   categories: Category[];
-  showCategories?: boolean;
   channels: Channel[];
   selectedCategory: number;
   selectedChannel: number;
@@ -23,43 +22,41 @@ type Props = {
 
 export function Sidebar(props: Props) {
   const {
-    open, focus, categories, channels, selectedCategory, selectedChannel, showCategories = true,
+    open, focus, categories, channels, selectedCategory, selectedChannel,
     categoryQuery, channelQuery, playingId, activeCategoryName, channelOrderModeLabel,
     onCategoryQuery, onChannelQuery, onPickCategory, onPickChannel,
   } = props;
 
   return (
     <div id="sidebar" className={open ? 'open' : ''}>
-      {showCategories && (
-        <div className={`panel ${focus === 'categories' ? 'active' : ''}`} id="catPanel">
-          <div className="panelHead">
-            <span className="ttl">Categories</span>
-            <span className="badge">{categories.length}</span>
-          </div>
-          <div className="searchWrap">
-            <input
-              className="sInput"
-              placeholder="Search categories…"
-              value={categoryQuery}
-              onChange={(e) => onCategoryQuery(e.target.value)}
-            />
-          </div>
-          <VirtualList
-            items={categories}
-            selectedIndex={selectedCategory}
-            active={open && focus === 'categories'}
-            onPick={onPickCategory}
-            render={(cat) => (
-              <>
-                <div className="dot" />
-                <div className="meta">
-                  <div className="iname">{cat.category_name || 'Unnamed'}</div>
-                </div>
-              </>
-            )}
+      <div className={`panel ${focus === 'categories' ? 'active' : ''}`} id="catPanel">
+        <div className="panelHead">
+          <span className="ttl">Categories</span>
+          <span className="badge">{categories.length}</span>
+        </div>
+        <div className="searchWrap">
+          <input
+            className="sInput"
+            placeholder="Search categories…"
+            value={categoryQuery}
+            onChange={(e) => onCategoryQuery(e.target.value)}
           />
         </div>
-      )}
+        <VirtualList
+          items={categories}
+          selectedIndex={selectedCategory}
+          active={open && focus === 'categories'}
+          onPick={onPickCategory}
+          render={(cat) => (
+            <>
+              <div className="dot" />
+              <div className="meta">
+                <div className="iname">{cat.category_name || 'Unnamed'}</div>
+              </div>
+            </>
+          )}
+        />
+      </div>
       <div className={`panel ${focus === 'channels' ? 'active' : ''}`} id="chPanel">
         <div className="panelHead">
           <span className="ttl">{activeCategoryName || 'Channels'}</span>
