@@ -67,6 +67,7 @@ export default function App() {
   const [orderPromptDigits, setOrderPromptDigits] = React.useState('');
   const [orderPromptReplaceOnDigit, setOrderPromptReplaceOnDigit] = React.useState(false);
   const [orderPromptTarget, setOrderPromptTarget] = React.useState<{ streamId: string; name: string; catId: string } | null>(null);
+  const [orderPromptError, setOrderPromptError] = React.useState('');
   const [selCat, setSelCat] = React.useState(0);
   const [selCh, setSelCh] = React.useState(0);
   const [catQuery, setCatQuery] = React.useState('');
@@ -880,6 +881,7 @@ export default function App() {
           e.preventDefault();
           setOrderPromptDigits((v) => (orderPromptReplaceOnDigit ? e.key : (v + e.key).slice(0, 4)));
           setOrderPromptReplaceOnDigit(false);
+          if (orderPromptError) setOrderPromptError('');
           return;
         }
         if (e.key === 'Backspace') {
@@ -887,8 +889,10 @@ export default function App() {
           if (orderPromptReplaceOnDigit) {
             setOrderPromptDigits('');
             setOrderPromptReplaceOnDigit(false);
+            if (orderPromptError) setOrderPromptError('');
           } else {
             setOrderPromptDigits((v) => v.slice(0, -1));
+            if (orderPromptError) setOrderPromptError('');
           }
           return;
         }
@@ -898,14 +902,25 @@ export default function App() {
           setOrderPromptDigits('');
           setOrderPromptReplaceOnDigit(false);
           setOrderPromptTarget(null);
+          setOrderPromptError('');
           return;
         }
         if (e.key === 'Enter') {
           e.preventDefault();
           const order = parseInt(orderPromptDigits, 10);
           if (!isNaN(order) && order > 0 && orderPromptTarget) {
-            const next = { ...channelOrderMap };
             const catId = orderPromptTarget.catId || activeCatRef.current || '';
+            const catOrders = channelOrderMap[catId] || {};
+            const duplicateEntry = Object.entries(catOrders).find(([streamId, pos]) => (
+              String(streamId) !== orderPromptTarget.streamId && Number(pos) === order
+            ));
+
+            if (duplicateEntry) {
+              setOrderPromptError('Enter another number');
+              return;
+            }
+
+            const next = { ...channelOrderMap };
             next[catId] = { ...(next[catId] || {}), [orderPromptTarget.streamId]: order };
             writeChannelOrderMap(next);
             setHudSub(`Set ${orderPromptTarget.name} to order #${order}`);
@@ -915,6 +930,7 @@ export default function App() {
           setOrderPromptDigits('');
           setOrderPromptReplaceOnDigit(false);
           setOrderPromptTarget(null);
+          setOrderPromptError('');
           return;
         }
       }
@@ -965,6 +981,7 @@ export default function App() {
           });
           setOrderPromptDigits(prevOrder ? String(prevOrder) : '');
           setOrderPromptReplaceOnDigit(Boolean(prevOrder));
+          setOrderPromptError('');
           setOrderPromptOpen(true);
         }
         return;
@@ -1080,7 +1097,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [categories, channelList, channelOrderMap, channels, connect, customOrderInList, customOrderedChannels, executeZap, focus, loadCategory, moveByChannelRow, orderPromptDigits, orderPromptOpen, orderPromptReplaceOnDigit, orderPromptTarget, playChannel, playingId, selCat, selCh, settingsOpen, showKeyIndicator, showToast, sidebarOpen, wakeHud, writeChannelOrderMap, writeChannelOrderMode, zapDigits]);
+  }, [categories, channelList, channelOrderMap, channels, connect, customOrderInList, customOrderedChannels, executeZap, focus, loadCategory, moveByChannelRow, orderPromptDigits, orderPromptError, orderPromptOpen, orderPromptReplaceOnDigit, orderPromptTarget, playChannel, playingId, selCat, selCh, settingsOpen, showKeyIndicator, showToast, sidebarOpen, wakeHud, writeChannelOrderMap, writeChannelOrderMode, zapDigits]);
 
   return (
     <>
@@ -1134,11 +1151,12 @@ export default function App() {
       />
 
       <div id="orderPrompt" className={orderPromptOpen ? 'show' : ''}>
-        <div className="orderCard">
+        <div className={`orderCard${orderPromptError ? ' hasError' : ''}`}>
           <div className="orderTitle">Set channel order</div>
           <div className="orderName">{orderPromptTarget?.name || 'Channel'}</div>
-          <div className="orderDigits">{orderPromptDigits || '—'}</div>
+          <div className={`orderDigits${orderPromptError ? ' hasError' : ''}`}>{orderPromptDigits || '—'}</div>
           <div className="orderHelp">Use number keys, OK to save (empty = no change), Back to edit</div>
+          {orderPromptError && <div className="orderErr">{orderPromptError}</div>}
         </div>
       </div>
 
