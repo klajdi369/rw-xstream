@@ -1,55 +1,41 @@
 import React from 'react';
-import Hls from 'hls.js';
-import mpegts from 'mpegts.js';
 import { Hud } from './components/Hud';
+import { OrderPrompt } from './components/OrderPrompt';
 import { SettingsOverlay } from './components/SettingsOverlay';
 import { Sidebar } from './components/Sidebar';
+import { useChannelOrder } from './hooks/useChannelOrder';
+import { useEpg } from './hooks/useEpg';
+import { useHud } from './hooks/useHud';
+import { useKeyIndicator } from './hooks/useKeyIndicator';
+import { usePlayback } from './hooks/usePlayback';
+import { useProxyMemory } from './hooks/useProxyMemory';
+import { useToast } from './hooks/useToast';
 import { Category, Channel, LastChannel } from './types/player';
-
-const SAVE_KEY = 'xtream_tv_v4';
-const LAST_KEY = 'xtream_last_ch';
-const CHANNEL_PROXY_MEMORY_KEY = 'xtream_channel_proxy_memory_v1';
-const CHANNEL_ORDER_KEY = 'xtream_channel_custom_order_v1';
-const CHANNEL_ORDER_MODE_KEY = 'xtream_channel_order_mode_v1';
-const CHANNEL_PROXY_MAX_VISITS = 6;
-const CHANNEL_ROW_JUMP = 8;
-const HIDE_CATEGORIES = true;
-const CATEGORY_UNLOCK_PRESS_COUNT = 4;
-const CATEGORY_UNLOCK_WINDOW_MS = 1400;
-
-const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
-
-function normServer(s: string) {
-  const t = (s || '').trim();
-  if (!t) return '';
-  if (!/^https?:\/\//i.test(t)) return `http://${t}`.replace(/\/+$/, '');
-  return t.replace(/\/+$/, '');
-}
-
-function fmtTime(ts: number) {
-  const d = new Date(ts * 1000);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-}
+import {
+  CATEGORY_UNLOCK_PRESS_COUNT,
+  CATEGORY_UNLOCK_WINDOW_MS,
+  CHANNEL_ROW_JUMP,
+  HIDE_CATEGORIES,
+  LAST_KEY,
+  SAVE_KEY,
+} from './constants';
+import { clamp, normServer } from './utils';
 
 export default function App() {
   const videoRef = React.useRef<HTMLVideoElement>(null);
-  const hlsRef = React.useRef<Hls | null>(null);
-  const mtsRef = React.useRef<any>(null);
-  const epgIntervalRef = React.useRef<any>(null);
-  const epgRequestRef = React.useRef(0);
+  const activeCatRef = React.useRef<string>('');
+  const backendBaseRef = React.useRef(
+    import.meta.env.DEV
+      ? `${window.location.protocol}//${window.location.hostname}:3005`
+      : window.location.origin,
+  );
 
+  // ── Overlays ────────────────────────────────────────────────────────────────
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
-  const [connecting, setConnecting] = React.useState(false);
-  const [connectMsg, setConnectMsg] = React.useState('Connecting…');
-  const [connectProgress, setConnectProgress] = React.useState(0);
-  const [resumeLabel, setResumeLabel] = React.useState('');
   const [focus, setFocus] = React.useState<'categories' | 'channels'>('channels');
 
-  const [hudTitle, setHudTitle] = React.useState('IPTV Player');
-  const [hudSub, setHudSub] = React.useState('Press OK to open channel list');
-  const [hudHidden, setHudHidden] = React.useState(true);
-
+  // ── Connection credentials ───────────────────────────────────────────────────
   const [server, setServer] = React.useState('http://line.tivi-ott.net');
   const [user, setUser] = React.useState('UMYLEJ');
   const [pass, setPass] = React.useState('VFCED1');
@@ -57,52 +43,62 @@ export default function App() {
   const [remember, setRemember] = React.useState(true);
   const [useProxy, setUseProxy] = React.useState(true);
   const [rememberProxyMode, setRememberProxyMode] = React.useState(true);
+
+  // ── Settings form state ──────────────────────────────────────────────────────
   const [msg, setMsg] = React.useState('');
   const [msgIsError, setMsgIsError] = React.useState(false);
   const [settingsProgress, setSettingsProgress] = React.useState(0);
+  const [resumeLabel, setResumeLabel] = React.useState('');
 
+  // ── Connecting overlay ───────────────────────────────────────────────────────
+  const [connecting, setConnecting] = React.useState(false);
+  const [connectMsg, setConnectMsg] = React.useState('Connecting…');
+  const [connectProgress, setConnectProgress] = React.useState(0);
+
+  // ── Categories / channels ────────────────────────────────────────────────────
   const [allCategories, setAllCategories] = React.useState<Category[]>([]);
   const [categories, setCategories] = React.useState<Category[]>([]);
   const [channels, setChannels] = React.useState<Channel[]>([]);
-  const [channelOrderMap, setChannelOrderMap] = React.useState<Record<string, Record<string, number>>>({});
-  const [customOrderInList, setCustomOrderInList] = React.useState(true);
-  const [orderPromptOpen, setOrderPromptOpen] = React.useState(false);
-  const [orderPromptDigits, setOrderPromptDigits] = React.useState('');
-  const [orderPromptReplaceOnDigit, setOrderPromptReplaceOnDigit] = React.useState(false);
-  const [orderPromptTarget, setOrderPromptTarget] = React.useState<{ streamId: string; name: string; catId: string } | null>(null);
-  const [orderPromptError, setOrderPromptError] = React.useState('');
+  const [activeCatName, setActiveCatName] = React.useState('Channels');
   const [showAllCategories, setShowAllCategories] = React.useState(false);
   const [selCat, setSelCat] = React.useState(0);
   const [selCh, setSelCh] = React.useState(0);
   const [catQuery, setCatQuery] = React.useState('');
   const [chQuery, setChQuery] = React.useState('');
-  const [playingId, setPlayingId] = React.useState<string | null>(null);
-  const [buffering, setBuffering] = React.useState(false);
-  const [activeCatName, setActiveCatName] = React.useState('Channels');
-  const [epg, setEpg] = React.useState<{ nowTitle: string; nowTime: string; progress: number; next: string } | null>(null);
 
-  // Channel toast (shows channel name on zap)
-  const [channelToast, setChannelToast] = React.useState('');
-  const toastTimerRef = React.useRef<any>(null);
+  // ── Order prompt ─────────────────────────────────────────────────────────────
+  const [orderPromptOpen, setOrderPromptOpen] = React.useState(false);
+  const [orderPromptDigits, setOrderPromptDigits] = React.useState('');
+  const [orderPromptReplaceOnDigit, setOrderPromptReplaceOnDigit] = React.useState(false);
+  const [orderPromptTarget, setOrderPromptTarget] = React.useState<{ streamId: string; name: string; catId: string } | null>(null);
+  const [orderPromptError, setOrderPromptError] = React.useState('');
 
-  // Number zap (type channel number on remote)
+  // ── Number zap ───────────────────────────────────────────────────────────────
   const [zapDigits, setZapDigits] = React.useState('');
-  const zapTimerRef = React.useRef<any>(null);
-  const [keyIndicator, setKeyIndicator] = React.useState('');
-  const keyIndicatorTimerRef = React.useRef<any>(null);
+  const zapTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const orderKeySeqRef = React.useRef<{ count: number; until: number }>({ count: 0, until: 0 });
 
+  // ── Composition cache ─────────────────────────────────────────────────────────
   const cacheRef = React.useRef<Map<string, Channel[]>>(new Map());
-  const activeCatRef = React.useRef<string>('');
-  const hudTimerRef = React.useRef<any>(null);
-  const playTokenRef = React.useRef(0);
-  const preloadAbortRef = React.useRef<Map<string, AbortController>>(new Map());
-  const preloadStampRef = React.useRef<Map<string, number>>(new Map());
-  const backendBaseRef = React.useRef(import.meta.env.DEV
-    ? `${window.location.protocol}//${window.location.hostname}:3005`
-    : window.location.origin);
 
-  const apiUrl = React.useCallback((params: Record<string, any>) => {
+  // ── Custom hooks ──────────────────────────────────────────────────────────────
+  const { hudTitle, setHudTitle, hudSub, setHudSub, hudHidden, wakeHud } = useHud({ sidebarOpen, settingsOpen });
+  const { channelToast, showToast } = useToast();
+  const { keyIndicator, showKeyIndicator } = useKeyIndicator();
+  const {
+    channelOrderMap,
+    customOrderInList,
+    readChannelOrderMap,
+    writeChannelOrderMap,
+    readChannelOrderMode,
+    writeChannelOrderMode,
+    sortWithCustomOrder,
+    init: initChannelOrder,
+  } = useChannelOrder();
+  const { readChannelProxyMemory, writeChannelProxyMemory } = useProxyMemory();
+
+  // ── API helpers ───────────────────────────────────────────────────────────────
+  const apiUrl = React.useCallback((params: Record<string, string>) => {
     const u = new URL(`${normServer(server)}/player_api.php`);
     u.searchParams.set('username', user);
     u.searchParams.set('password', pass);
@@ -110,590 +106,49 @@ export default function App() {
     return u.toString();
   }, [server, user, pass]);
 
-  const jget = React.useCallback(async (url: string): Promise<any> => {
+  const jget = React.useCallback(async (url: string): Promise<unknown> => {
     const r = await fetch(url);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return r.json();
   }, []);
 
-  const showToast = React.useCallback((text: string) => {
-    setChannelToast(text);
-    clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = setTimeout(() => setChannelToast(''), 2500);
-  }, []);
+  // ── EPG ───────────────────────────────────────────────────────────────────────
+  const { epg, fetchEpg, clearEpg, stopEpgRefresh } = useEpg({ apiUrl, jget });
 
-  const readChannelProxyMemory = React.useCallback(() => {
-    try {
-      const parsed = JSON.parse(localStorage.getItem(CHANNEL_PROXY_MEMORY_KEY) || '{}');
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch {
-      return {};
-    }
-  }, []);
+  // ── Playback ──────────────────────────────────────────────────────────────────
+  const { playingId, buffering, playChannel, stopPlayback } = usePlayback({
+    videoRef,
+    backendBaseRef,
+    activeCatRef,
+    server,
+    user,
+    pass,
+    fmt,
+    useProxy,
+    rememberProxyMode,
+    remember,
+    channels,
+    fetchEpg,
+    clearEpg,
+    stopEpgRefresh,
+    readChannelProxyMemory,
+    writeChannelProxyMemory,
+    setHudTitle,
+    setHudSub,
+    wakeHud,
+  });
 
-  const readChannelOrderMap = React.useCallback(() => {
-    try {
-      const parsed = JSON.parse(localStorage.getItem(CHANNEL_ORDER_KEY) || '{}');
-      return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch {
-      return {};
-    }
-  }, []);
-
-  const writeChannelOrderMap = React.useCallback((next: Record<string, Record<string, number>>) => {
-    localStorage.setItem(CHANNEL_ORDER_KEY, JSON.stringify(next));
-    setChannelOrderMap(next);
-  }, []);
-
-
-  const readChannelOrderMode = React.useCallback(() => {
-    try {
-      const raw = localStorage.getItem(CHANNEL_ORDER_MODE_KEY);
-      if (raw == null) return true;
-      return raw !== 'default';
-    } catch {
-      return true;
-    }
-  }, []);
-
-  const writeChannelOrderMode = React.useCallback((isCustom: boolean) => {
-    localStorage.setItem(CHANNEL_ORDER_MODE_KEY, isCustom ? 'custom' : 'default');
-    setCustomOrderInList(isCustom);
-  }, []);
-
-  const sortWithCustomOrder = React.useCallback((list: Channel[], catId: string, enabled: boolean) => {
-    if (!enabled) return list;
-    const orders = channelOrderMap[catId] || {};
-    const total = list.length;
-    if (!total) return list;
-
-    const withMeta = list.map((ch, index) => {
-      const raw = Number(orders[String(ch.stream_id)]);
-      const hasOrder = Number.isFinite(raw) && raw > 0;
-      const order = hasOrder ? clamp(Math.floor(raw), 1, total) : 0;
-      return { ch, index, hasOrder, order };
-    });
-
-    const pinned = withMeta
-      .filter((item) => item.hasOrder)
-      .sort((a, b) => (a.order - b.order) || (a.index - b.index));
-
-    const unpinned = withMeta.filter((item) => !item.hasOrder);
-    const result: Channel[] = new Array(total);
-    const used = new Set<number>();
-
-    for (const item of pinned) {
-      let pos = item.order - 1;
-      while (pos < total && used.has(pos)) pos += 1;
-      if (pos >= total) {
-        pos = 0;
-        while (pos < total && used.has(pos)) pos += 1;
-      }
-      if (pos >= total) break;
-      result[pos] = item.ch;
-      used.add(pos);
-    }
-
-    let u = 0;
-    for (let i = 0; i < total; i += 1) {
-      if (used.has(i)) continue;
-      result[i] = unpinned[u].ch;
-      u += 1;
-    }
-
-    return result;
-  }, [channelOrderMap]);
-
-  const customOrderedChannels = React.useMemo(() => sortWithCustomOrder(channels, activeCatRef.current || '', true), [channels, sortWithCustomOrder]);
+  // ── Derived channel lists ─────────────────────────────────────────────────────
+  const customOrderedChannels = React.useMemo(
+    () => sortWithCustomOrder(channels, activeCatRef.current || '', true),
+    [channels, sortWithCustomOrder],
+  );
   const channelList = React.useMemo(
     () => sortWithCustomOrder(channels, activeCatRef.current || '', customOrderInList),
     [channels, customOrderInList, sortWithCustomOrder],
   );
 
-  const writeChannelProxyMemory = React.useCallback((next: Record<string, { useProxy: boolean; visits: number }>) => {
-    localStorage.setItem(CHANNEL_PROXY_MEMORY_KEY, JSON.stringify(next));
-  }, []);
-
-  const showKeyIndicator = React.useCallback((key: string) => {
-    const labels: Record<string, string> = {
-      ArrowUp: '↑',
-      ArrowDown: '↓',
-      ArrowLeft: '←',
-      ArrowRight: '→',
-      Enter: 'OK',
-      Escape: 'ESC',
-      Backspace: 'BACK',
-      ' ': 'SPACE',
-      PageUp: 'CH+',
-      PageDown: 'CH-',
-      ChannelUp: 'CH+',
-      ChannelDown: 'CH-',
-      MediaTrackPrevious: 'CH+',
-      MediaTrackNext: 'CH-',
-    };
-    const normalized = key === 'Spacebar' ? ' ' : key;
-    const display = labels[normalized] || normalized;
-    setKeyIndicator(display);
-    clearTimeout(keyIndicatorTimerRef.current);
-    keyIndicatorTimerRef.current = setTimeout(() => setKeyIndicator(''), 900);
-  }, []);
-
-  const wakeHud = React.useCallback(() => {
-    setHudHidden(false);
-    clearTimeout(hudTimerRef.current);
-    if (!sidebarOpen && !settingsOpen) {
-      hudTimerRef.current = setTimeout(() => setHudHidden(true), 3500);
-    }
-  }, [settingsOpen, sidebarOpen]);
-
-  const clearEpg = React.useCallback(() => {
-    epgRequestRef.current += 1;
-    clearInterval(epgIntervalRef.current);
-    epgIntervalRef.current = null;
-    setEpg(null);
-  }, []);
-
-  const stopEpgRefresh = React.useCallback(() => {
-    clearInterval(epgIntervalRef.current);
-    epgIntervalRef.current = null;
-  }, []);
-
-  const decodePossiblyBase64Utf8 = React.useCallback((value: any) => {
-    const raw = value == null ? '' : String(value);
-    if (!raw) return '';
-
-    const looksBase64 = /^[A-Za-z0-9+/=\r\n]+$/.test(raw) && raw.replace(/\s+/g, '').length % 4 === 0;
-    if (looksBase64) {
-      try {
-        const bin = atob(raw.replace(/\s+/g, ''));
-        const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
-        return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-      } catch {
-        // fall through
-      }
-    }
-
-    // Repair common UTF-8-as-Latin1 mojibake sequences, e.g. "NjÃ«"
-    if (raw.includes('Ã') || raw.includes('Â')) {
-      try {
-        const bytes = Uint8Array.from(raw, (c) => c.charCodeAt(0) & 0xff);
-        return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-      } catch {
-        // noop
-      }
-    }
-
-    return raw;
-  }, []);
-
-  const parseEpgTs = React.useCallback((value: any) => {
-    const s = value == null ? '' : String(value).trim();
-    if (!s) return 0;
-
-    if (/^\d+$/.test(s)) {
-      const n = Number(s);
-      if (!Number.isFinite(n) || n <= 0) return 0;
-      return n > 1e12 ? Math.floor(n / 1000) : Math.floor(n);
-    }
-
-    const normalized = s.includes('T') ? s : s.replace(' ', 'T');
-    const ms = Date.parse(normalized);
-    if (!Number.isNaN(ms)) return Math.floor(ms / 1000);
-    return 0;
-  }, []);
-
-  const fetchEpg = React.useCallback(async (streamId: string | number) => {
-    const requestId = epgRequestRef.current + 1;
-    epgRequestRef.current = requestId;
-
-    stopEpgRefresh();
-    try {
-      const data: any = await jget(apiUrl({ action: 'get_short_epg', stream_id: String(streamId), limit: '2' }));
-      if (requestId !== epgRequestRef.current) return;
-
-      const list: any[] = data?.epg_listings || data?.Epg_listings || data?.listings || [];
-      if (!list.length) {
-        setEpg(null);
-        return;
-      }
-
-      const entries = list
-        .map((e: any) => {
-          const start = parseEpgTs(e.start_timestamp ?? e.start ?? e.start_ts ?? e.begin ?? e.from);
-          const end = parseEpgTs(e.stop_timestamp ?? e.end_timestamp ?? e.end ?? e.stop ?? e.to);
-          return {
-            title: decodePossiblyBase64Utf8(e.title ?? e.name ?? e.programme_title ?? ''),
-            start,
-            end,
-          };
-        })
-        .filter((e: any) => e.start > 0 && e.end > e.start)
-        .sort((a: any, b: any) => a.start - b.start);
-
-      if (!entries.length) {
-        setEpg(null);
-        return;
-      }
-
-      const paint = () => {
-        if (requestId !== epgRequestRef.current) return;
-        const nowSec = Date.now() / 1000;
-
-        let curIndex = entries.findIndex((e: any) => e.start <= nowSec && e.end > nowSec);
-        if (curIndex < 0) {
-          const firstFutureIndex = entries.findIndex((e: any) => e.start > nowSec);
-          curIndex = firstFutureIndex > 0 ? firstFutureIndex - 1 : entries.length - 1;
-        }
-
-        const cur = entries[curIndex];
-        if (!cur) return;
-
-        const next = entries[curIndex + 1] || null;
-        const dur = Math.max(1, cur.end - cur.start);
-        const progress = Math.min(100, Math.max(0, Math.round(((nowSec - cur.start) / dur) * 100)));
-
-        if (requestId !== epgRequestRef.current) return;
-
-        setEpg({
-          nowTitle: cur.title,
-          nowTime: `${fmtTime(cur.start)} – ${fmtTime(cur.end)}`,
-          progress,
-          next: next ? `Next  ${fmtTime(next.start)}  ${next.title}` : '',
-        });
-
-        if (!next && nowSec >= cur.end - 10 && requestId === epgRequestRef.current) {
-          void fetchEpg(streamId);
-        }
-      };
-
-      paint();
-      epgIntervalRef.current = setInterval(paint, 30000);
-    } catch {
-      if (requestId !== epgRequestRef.current) return;
-      stopEpgRefresh();
-      setEpg(null);
-    }
-  }, [apiUrl, decodePossiblyBase64Utf8, jget, parseEpgTs, stopEpgRefresh]);
-
-
-  const preloadNearbyChannels = React.useCallback((list: Channel[], centerIndex: number) => {
-    if (!list.length || !server || !user || !pass) return;
-
-    const now = Date.now();
-    const indices: number[] = [];
-    for (let i = centerIndex - 3; i <= centerIndex + 3; i += 1) {
-      if (i >= 0 && i < list.length && i !== centerIndex) indices.push(i);
-    }
-
-    const sourceFormat: 'm3u8' | 'ts' = fmt === 'ts' ? 'ts' : 'm3u8';
-
-    for (const idx of indices) {
-      const ch = list[idx];
-      if (!ch) continue;
-      const key = `${ch.stream_id}:${sourceFormat}`;
-      const last = preloadStampRef.current.get(key) || 0;
-      if (now - last < 20000) continue;
-      preloadStampRef.current.set(key, now);
-
-      const prev = preloadAbortRef.current.get(key);
-      if (prev) prev.abort();
-
-      const directUrl = `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${sourceFormat}`;
-      const warmUrl = useProxy
-        ? `${backendBaseRef.current}/proxy?url=${encodeURIComponent(directUrl)}&deint=0`
-        : directUrl;
-
-      const ctl = new AbortController();
-      preloadAbortRef.current.set(key, ctl);
-      window.setTimeout(() => ctl.abort(), 1800);
-
-      fetch(warmUrl, {
-        method: 'GET',
-        cache: 'no-store',
-        mode: useProxy ? 'same-origin' : 'no-cors',
-        signal: ctl.signal,
-      }).catch(() => {
-        // best-effort warmup only
-      }).finally(() => {
-        if (preloadAbortRef.current.get(key) === ctl) {
-          preloadAbortRef.current.delete(key);
-        }
-      });
-    }
-  }, [fmt, pass, server, useProxy, user]);
-
-
-  React.useEffect(() => () => {
-    preloadAbortRef.current.forEach((ctl) => ctl.abort());
-    preloadAbortRef.current.clear();
-  }, []);
-
-  const stopPlayback = React.useCallback((preserveEpg = false) => {
-    hlsRef.current?.destroy();
-    hlsRef.current = null;
-    try { mtsRef.current?.destroy(); } catch { /* noop */ }
-    mtsRef.current = null;
-    if (preserveEpg) stopEpgRefresh();
-    else clearEpg();
-    if (videoRef.current) {
-      videoRef.current.pause();
-      videoRef.current.removeAttribute('src');
-      videoRef.current.load();
-    }
-  }, [clearEpg, stopEpgRefresh]);
-
-  const playChannel = React.useCallback((ch: Channel, forceFmt?: 'm3u8' | 'ts') => {
-    const v = videoRef.current;
-    if (!v) return;
-
-    const playToken = ++playTokenRef.current;
-    const preferredFmt = forceFmt ?? (fmt === 'ts' ? 'ts' : 'm3u8');
-    const attemptOrder = preferredFmt === 'ts'
-      ? [
-        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: false },
-        { sourceFormat: 'ts' as const, playAs: 'ts' as const, viaProxy: true, viaTranscode: false },
-      ]
-      : [
-        { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: false, viaTranscode: false },
-        // { sourceFormat: 'm3u8' as const, playAs: 'm3u8' as const, viaProxy: true, viaTranscode: false },
-        { sourceFormat: 'm3u8' as const, playAs: 'ts' as const, viaProxy: false, viaTranscode: true },
-      ];
-
-    const channelId = String(ch.stream_id);
-    const rememberedMode = rememberProxyMode ? readChannelProxyMemory()[channelId] : null;
-    const rememberedUseProxy = rememberedMode && rememberedMode.visits <= CHANNEL_PROXY_MAX_VISITS
-      ? rememberedMode.useProxy
-      : null;
-
-    const reorderAttempts = (list: typeof attemptOrder) => {
-      if (rememberedUseProxy === null) return list;
-      const preferred = list.filter((a) => (a.viaProxy || a.viaTranscode) === rememberedUseProxy);
-      const fallback = list.filter((a) => (a.viaProxy || a.viaTranscode) !== rememberedUseProxy);
-      return [...preferred, ...fallback];
-    };
-
-    const attempts = useProxy
-      ? reorderAttempts(attemptOrder)
-      : attemptOrder.filter((a) => !a.viaProxy && !a.viaTranscode);
-
-    const rememberChannelPlaybackMode = (loadedThroughProxy: boolean) => {
-      if (!rememberProxyMode) return;
-      const memory = readChannelProxyMemory();
-      const prevVisits = Number(memory[channelId]?.visits || 0);
-      const visits = prevVisits + 1;
-      if (visits > CHANNEL_PROXY_MAX_VISITS) {
-        delete memory[channelId];
-      } else {
-        memory[channelId] = { useProxy: loadedThroughProxy, visits };
-      }
-      writeChannelProxyMemory(memory);
-    };
-
-    const resetRememberedPlaybackMode = () => {
-      if (!rememberProxyMode) return;
-      const memory = readChannelProxyMemory();
-      if (memory[channelId]) {
-        delete memory[channelId];
-        writeChannelProxyMemory(memory);
-      }
-    };
-
-    setPlayingId(String(ch.stream_id));
-    setBuffering(true);
-    setHudTitle(ch.name || 'Playing');
-    void fetchEpg(ch.stream_id);
-
-    const currentIndex = channels.findIndex((c) => String(c.stream_id) === String(ch.stream_id));
-    if (currentIndex >= 0) preloadNearbyChannels(channels, currentIndex);
-
-    const startAttempt = async (index: number) => {
-      if (playToken !== playTokenRef.current) return;
-      const attempt = attempts[index];
-      if (!attempt) {
-        setHudSub('Cannot play this stream');
-        setBuffering(false);
-        wakeHud();
-        return;
-      }
-
-      stopPlayback(true);
-      // Brief pause to let old connections drain — prevents 403 from
-      // IPTV servers that reject concurrent connections per account.
-      // We wait longer specifically when switching from direct HLS to
-      // proxy requests, because providers can keep the previous HLS
-      // session alive for a short window and reject the new one.
-      const prevAttempt = index > 0 ? attempts[index - 1] : null;
-      const switchingDirectToProxy = !!(attempt.viaProxy && prevAttempt && !prevAttempt.viaProxy);
-      const waitMs = switchingDirectToProxy
-        ? 1800
-        : (index === 0 ? 150 : 300);
-      await new Promise((r) => setTimeout(r, waitMs));
-      if (playToken !== playTokenRef.current) return;
-
-      const directUrl = `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${attempt.sourceFormat}`;
-      const proxyRelative = `/proxy?url=${encodeURIComponent(directUrl)}&deint=1`;
-      const proxyAbsolute = `${backendBaseRef.current}${proxyRelative}`;
-      const transcodeRelative = `/proxy-transcode?url=${encodeURIComponent(directUrl)}`;
-      const transcodeAbsolute = `${backendBaseRef.current}${transcodeRelative}`;
-      const url = attempt.viaTranscode ? transcodeAbsolute : (attempt.viaProxy ? proxyAbsolute : directUrl);
-
-      const modeLabel = `${attempt.playAs.toUpperCase()}${attempt.viaProxy ? ' + Proxy' : ''}${attempt.viaTranscode ? ' + FFMPEG' : ''}`;
-      setHudSub(`Connecting… ${modeLabel}`);
-      wakeHud();
-      console.log('[Player] attempt', { index, modeLabel, url });
-
-      let settled = false;
-      let blackGuard: number | null = null;
-
-      const clearBlackGuard = () => {
-        if (blackGuard !== null) {
-          window.clearTimeout(blackGuard);
-          blackGuard = null;
-        }
-      };
-
-      const fallback = () => {
-        if (settled || playToken !== playTokenRef.current) return;
-        settled = true;
-        clearBlackGuard();
-
-        if (attempts[index + 1]) {
-          console.warn('[Player] fallback', { modeLabel, next: index + 1 });
-          setHudSub(`${modeLabel} failed — retrying…`);
-          wakeHud();
-          setTimeout(() => { void startAttempt(index + 1); }, 200);
-        } else {
-          resetRememberedPlaybackMode();
-          setHudSub('Cannot play this stream');
-          setBuffering(false);
-          wakeHud();
-        }
-      };
-
-
-      const armBlackGuard = () => {
-        clearBlackGuard();
-
-        const startedAt = Date.now();
-        const isDirectHls = attempt.playAs === 'm3u8' && !attempt.viaProxy && !attempt.viaTranscode;
-        // Prefer quicker fallback for direct HLS quirks, while keeping
-        // proxy/transcode windows long enough for startup.
-        const maxWaitMs = attempt.viaTranscode
-          ? 20000
-          : (attempt.viaProxy ? 7000 : (isDirectHls ? 2600 : 4000));
-
-        const probe = () => {
-          if (settled || playToken !== playTokenRef.current) return;
-
-          const q = v.getVideoPlaybackQuality?.();
-          const frames = q ? q.totalVideoFrames : ((v as any).webkitDecodedFrameCount || 0);
-
-          const progressed = v.currentTime > 1 || (!v.paused && v.readyState >= 3);
-          const hasAudioBytes = ((v as any).webkitAudioDecodedByteCount || 0) > 0;
-
-          if (frames > 0 || progressed || hasAudioBytes) {
-            settled = true;
-            clearBlackGuard();
-            rememberChannelPlaybackMode(attempt.viaProxy || attempt.viaTranscode);
-            setBuffering(false);
-            return;
-          }
-
-          if (Date.now() - startedAt >= maxWaitMs) {
-            fallback();
-            return;
-          }
-
-          blackGuard = window.setTimeout(probe, 800);
-        };
-
-        const firstProbeMs = isDirectHls ? 1200 : 2500;
-        blackGuard = window.setTimeout(probe, firstProbeMs);
-      };
-
-      if (attempt.playAs === 'm3u8' && Hls.isSupported()) {
-        const hls = new Hls({ lowLatencyMode: true, maxBufferLength: 10, maxMaxBufferLength: 30 });
-        hlsRef.current = hls;
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          if (playToken !== playTokenRef.current) return;
-          setHudSub(`▶ Live (${modeLabel})`);
-          v.play().catch(() => fallback());
-          armBlackGuard();
-        });
-        let nonFatalHlsErrorScore = 0;
-        const hlsStartedAt = Date.now();
-        hls.on(Hls.Events.ERROR, (_: any, d: any) => {
-          if (playToken !== playTokenRef.current) return;
-          console.warn('[HLS][error]', d?.type, d?.details, d?.fatal);
-          if (d?.fatal) {
-            fallback();
-            return;
-          }
-
-          const suspiciousDetails = new Set([
-            'fragParsingError',
-            'bufferAppendError',
-            'bufferAddCodecError',
-            'manifestIncompatibleCodecsError',
-            'fragDecryptError',
-          ]);
-          const isDirectHls = !attempt.viaProxy && !attempt.viaTranscode;
-          if (isDirectHls && suspiciousDetails.has(String(d?.details || ''))) {
-            nonFatalHlsErrorScore += 1;
-            const elapsedMs = Date.now() - hlsStartedAt;
-            if (nonFatalHlsErrorScore >= 2 || elapsedMs >= 2200) {
-              console.warn('[HLS] early fallback due to repeated parsing/buffer errors');
-              fallback();
-            }
-          }
-        });
-        hls.attachMedia(v);
-        hls.loadSource(url);
-        return;
-      }
-
-      if (attempt.playAs === 'ts' && mpegts.getFeatureList().mseLivePlayback) {
-        const p = mpegts.createPlayer(
-          { type: 'mpegts', isLive: true, url },
-          {
-            enableWorker: false,
-            enableStashBuffer: true,
-            lazyLoad: false,
-            autoCleanupSourceBuffer: true,
-          },
-        );
-        mtsRef.current = p;
-        p.on(mpegts.Events.ERROR, (t: any, d: any) => {
-          if (playToken !== playTokenRef.current) return;
-          console.warn('[MPEGTS][error]', t, d);
-          fallback();
-        });
-        p.attachMediaElement(v);
-        p.load();
-        v.play().catch(() => fallback());
-        setHudSub(`▶ TS Live (${modeLabel})`);
-        armBlackGuard();
-        return;
-      }
-
-      v.src = url;
-      v.oncanplay = () => {
-        if (playToken !== playTokenRef.current) return;
-        setHudSub(`▶ Live (${modeLabel})`);
-        armBlackGuard();
-      };
-      v.onerror = () => fallback();
-      v.play().catch(() => fallback());
-    };
-
-    void startAttempt(0);
-
-    if (remember) {
-      const last: LastChannel = { streamId: String(ch.stream_id), name: ch.name, catId: activeCatRef.current };
-      localStorage.setItem(LAST_KEY, JSON.stringify(last));
-    }
-  }, [channels, fetchEpg, fmt, pass, preloadNearbyChannels, readChannelProxyMemory, remember, rememberProxyMode, server, stopPlayback, useProxy, user, wakeHud, writeChannelProxyMemory]);
-
+  // ── Load a category ───────────────────────────────────────────────────────────
   const loadCategory = React.useCallback(async (cat: Category, resetSel = true) => {
     const id = String(cat.category_id);
     activeCatRef.current = id;
@@ -701,9 +156,9 @@ export default function App() {
 
     let list = cacheRef.current.get(id);
     if (!list) {
-      const data: any = await jget(apiUrl({ action: 'get_live_streams', category_id: id }));
-      list = Array.isArray(data) ? data : [];
-      list.sort((a: any, b: any) => String(a.name || '').localeCompare(String(b.name || '')));
+      const data = await jget(apiUrl({ action: 'get_live_streams', category_id: id }));
+      list = Array.isArray(data) ? (data as Channel[]) : [];
+      list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
       cacheRef.current.set(id, list);
     }
 
@@ -715,8 +170,9 @@ export default function App() {
     setHudTitle(cat.category_name || 'Channels');
     setHudSub(`${visible.length} channels`);
     wakeHud();
-  }, [apiUrl, chQuery, jget, wakeHud]);
+  }, [apiUrl, chQuery, jget, setHudSub, setHudTitle, wakeHud]);
 
+  // ── Connect ───────────────────────────────────────────────────────────────────
   const connect = React.useCallback(async () => {
     if (!server || !user || !pass) {
       setMsg('Fill all fields');
@@ -732,14 +188,14 @@ export default function App() {
       setMsgIsError(false);
       setSettingsProgress(10);
 
-      const auth: any = await jget(apiUrl({}));
-      if (!auth?.user_info?.auth) throw new Error('Auth failed');
+      const auth = await jget(apiUrl({})) as Record<string, unknown>;
+      if (!(auth?.user_info as Record<string, unknown>)?.auth) throw new Error('Auth failed');
 
       setConnectMsg('Loading categories…');
       setConnectProgress(45);
       setSettingsProgress(45);
 
-      const raw: any = await jget(apiUrl({ action: 'get_live_categories' }));
+      const raw = await jget(apiUrl({ action: 'get_live_categories' }));
       const all = (Array.isArray(raw) ? raw : []) as Category[];
       all.sort((a, b) => Number(a.category_id) - Number(b.category_id));
       const filtered = all.filter((c) => String(c.category_name || '').toUpperCase().includes('ALBANIA'));
@@ -752,10 +208,7 @@ export default function App() {
       cacheRef.current.clear();
 
       localStorage.setItem(SAVE_KEY, JSON.stringify({
-        server,
-        user,
-        pass,
-        fmt,
+        server, user, pass, fmt,
         rememberChannel: remember,
         useProxy,
         rememberProxyMode,
@@ -791,14 +244,14 @@ export default function App() {
       setConnectProgress(100);
       setSettingsProgress(100);
       setSettingsOpen(false);
-      const visibleCategoryCount = HIDE_CATEGORIES && !showAllCategories ? scopedCategories.length : filtered.length;
-      setMsg(`Connected! ${visibleCategoryCount} categories.`);
+      const visibleCount = HIDE_CATEGORIES && !showAllCategories ? scopedCategories.length : filtered.length;
+      setMsg(`Connected! ${visibleCount} categories.`);
       setMsgIsError(false);
       setHudTitle('Ready');
       setHudSub('OK to open channel list');
       wakeHud();
-    } catch (e: any) {
-      const errMsg = `Failed: ${e?.message || String(e)}`;
+    } catch (e: unknown) {
+      const errMsg = `Failed: ${(e as Error)?.message || String(e)}`;
       setMsg(errMsg);
       setMsgIsError(true);
       setSettingsProgress(0);
@@ -807,14 +260,15 @@ export default function App() {
       setConnecting(false);
       setConnectProgress(0);
     }
-  }, [apiUrl, fmt, jget, loadCategory, pass, playChannel, remember, rememberProxyMode, server, useProxy, user, wakeHud, showAllCategories]);
+  }, [apiUrl, fmt, jget, loadCategory, pass, playChannel, remember, rememberProxyMode, server, setHudSub, setHudTitle, showAllCategories, useProxy, user, wakeHud]);
 
+  // ── Init from localStorage ────────────────────────────────────────────────────
   React.useEffect(() => {
-    const saved: any = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}');
-    if (saved.server) setServer(saved.server);
-    if (saved.user) setUser(saved.user);
-    if (saved.pass) setPass(saved.pass);
-    if (saved.fmt) setFmt(saved.fmt);
+    const saved = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}') as Record<string, unknown>;
+    if (saved.server) setServer(String(saved.server));
+    if (saved.user) setUser(String(saved.user));
+    if (saved.pass) setPass(String(saved.pass));
+    if (saved.fmt) setFmt(String(saved.fmt));
     if (saved.rememberChannel !== undefined) setRemember(saved.rememberChannel !== false);
     if (saved.useProxy !== undefined) setUseProxy(saved.useProxy !== false);
     if (saved.rememberProxyMode !== undefined) setRememberProxyMode(saved.rememberProxyMode !== false);
@@ -822,45 +276,37 @@ export default function App() {
     if (saved.server && saved.user && saved.pass) setTimeout(() => connect(), 30);
     else setSettingsOpen(true);
 
-    setChannelOrderMap(readChannelOrderMap());
-    setCustomOrderInList(readChannelOrderMode());
+    initChannelOrder();
 
     return () => {
       stopPlayback();
-      clearTimeout(hudTimerRef.current);
-      clearTimeout(keyIndicatorTimerRef.current);
+      if (zapTimerRef.current) clearTimeout(zapTimerRef.current);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-
-  React.useEffect(() => {
-    clearTimeout(hudTimerRef.current);
-    if (!sidebarOpen && !settingsOpen && !hudHidden) {
-      hudTimerRef.current = setTimeout(() => setHudHidden(true), 1800);
-    }
-  }, [hudHidden, settingsOpen, sidebarOpen]);
-
+  // ── Category filter ───────────────────────────────────────────────────────────
   React.useEffect(() => {
     if (HIDE_CATEGORIES && !showAllCategories) {
       setCategories(allCategories.slice(0, 1));
       setSelCat(0);
       return;
     }
-
     const q = catQuery.trim().toLowerCase();
     const filtered = q ? allCategories.filter((c) => String(c.category_name || '').toLowerCase().includes(q)) : allCategories;
     setCategories(filtered);
     setSelCat(0);
   }, [allCategories, catQuery, showAllCategories]);
 
+  // ── Channel filter on query change ────────────────────────────────────────────
   React.useEffect(() => {
     const cat = categories[selCat];
     if (!cat) return;
     loadCategory(cat, false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chQuery]);
 
-  // Number zap: type digits to jump to a channel number
+  // ── Number-zap: jump to channel by typed number ───────────────────────────────
   const executeZap = React.useCallback((digits: string) => {
     const num = parseInt(digits, 10);
     if (isNaN(num) || num < 1 || !customOrderedChannels.length) return;
@@ -884,11 +330,13 @@ export default function App() {
     }
   }, [channelList, customOrderedChannels, focus, playChannel, selCh, showToast, sidebarOpen]);
 
+  // ── Keyboard handler ──────────────────────────────────────────────────────────
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       showKeyIndicator(e.key);
       const isOrderButton = ['ColorF3Blue', 'Blue', 'NumLock'].includes(e.key);
 
+      // ── Order prompt mode ──
       if (orderPromptOpen) {
         if (e.key >= '0' && e.key <= '9') {
           e.preventDefault();
@@ -927,12 +375,10 @@ export default function App() {
             const duplicateEntry = Object.entries(catOrders).find(([streamId, pos]) => (
               String(streamId) !== orderPromptTarget.streamId && Number(pos) === order
             ));
-
             if (duplicateEntry) {
               setOrderPromptError('Enter another number');
               return;
             }
-
             const next = { ...channelOrderMap };
             next[catId] = { ...(next[catId] || {}), [orderPromptTarget.streamId]: order };
             writeChannelOrderMap(next);
@@ -948,18 +394,19 @@ export default function App() {
         }
       }
 
+      // ── Settings open ──
       if (settingsOpen) {
         if (e.key === 'Escape' || e.key === 'Backspace') setSettingsOpen(false);
         if (e.key === 'Enter') connect();
         return;
       }
 
-      // Number keys for channel zapping (only when sidebar is closed and not in search)
+      // ── Number zap (sidebar closed) ──
       if (!sidebarOpen && e.key >= '0' && e.key <= '9') {
         e.preventDefault();
         const newDigits = zapDigits + e.key;
         setZapDigits(newDigits);
-        clearTimeout(zapTimerRef.current);
+        if (zapTimerRef.current) clearTimeout(zapTimerRef.current);
         zapTimerRef.current = setTimeout(() => {
           executeZap(newDigits);
           setZapDigits('');
@@ -970,6 +417,7 @@ export default function App() {
 
       wakeHud();
 
+      // ── Order button ──
       if (isOrderButton) {
         e.preventDefault();
 
@@ -1023,6 +471,7 @@ export default function App() {
         return;
       }
 
+      // ── Sidebar closed navigation ──
       if (!sidebarOpen) {
         if (['PageUp', 'ChannelUp', 'MediaTrackPrevious'].includes(e.key)) {
           e.preventDefault();
@@ -1036,7 +485,6 @@ export default function App() {
         }
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          // Snap selection to the currently playing channel
           if (playingId && customOrderedChannels.length) {
             const playIdx = customOrderedChannels.findIndex((c) => String(c.stream_id) === playingId);
             if (playIdx >= 0) setSelCh(playIdx);
@@ -1067,6 +515,7 @@ export default function App() {
         return;
       }
 
+      // ── Sidebar open navigation ──
       if (e.key === 'Escape' || e.key === 'Backspace') {
         e.preventDefault();
         if (!HIDE_CATEGORIES && focus === 'categories') setFocus('channels');
@@ -1076,11 +525,13 @@ export default function App() {
 
       if (!HIDE_CATEGORIES && e.key === 'ArrowLeft' && focus === 'channels') {
         e.preventDefault();
-        return setFocus('categories');
+        setFocus('categories');
+        return;
       }
       if (!HIDE_CATEGORIES && e.key === 'ArrowRight' && focus === 'categories') {
         e.preventDefault();
-        return setFocus('channels');
+        setFocus('channels');
+        return;
       }
 
       if (['PageUp', 'ChannelUp', 'MediaTrackPrevious'].includes(e.key)) {
@@ -1103,8 +554,7 @@ export default function App() {
       if (e.key === 'ArrowUp') {
         e.preventDefault();
         if (focus === 'categories') {
-          const next = clamp(selCat - 1, 0, Math.max(0, categories.length - 1));
-          setSelCat(next);
+          setSelCat((v) => clamp(v - 1, 0, Math.max(0, categories.length - 1)));
         } else {
           setSelCh((v) => clamp(v - 1, 0, Math.max(0, channelList.length - 1)));
         }
@@ -1112,8 +562,7 @@ export default function App() {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         if (focus === 'categories') {
-          const next = clamp(selCat + 1, 0, Math.max(0, categories.length - 1));
-          setSelCat(next);
+          setSelCat((v) => clamp(v + 1, 0, Math.max(0, categories.length - 1)));
         } else {
           setSelCh((v) => clamp(v + 1, 0, Math.max(0, channelList.length - 1)));
         }
@@ -1133,23 +582,28 @@ export default function App() {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [categories, channelList, channelOrderMap, channels, connect, customOrderInList, customOrderedChannels, executeZap, focus, loadCategory, moveByChannelRow, orderPromptDigits, orderPromptError, orderPromptOpen, orderPromptReplaceOnDigit, orderPromptTarget, playChannel, playingId, selCat, selCh, settingsOpen, showAllCategories, showKeyIndicator, showToast, sidebarOpen, wakeHud, writeChannelOrderMap, writeChannelOrderMode, zapDigits]);
+  }, [
+    categories, channelList, channelOrderMap, channels, connect, customOrderInList,
+    customOrderedChannels, executeZap, focus, loadCategory, moveByChannelRow,
+    orderPromptDigits, orderPromptError, orderPromptOpen, orderPromptReplaceOnDigit,
+    orderPromptTarget, playChannel, playingId, selCat, selCh, settingsOpen,
+    showAllCategories, showKeyIndicator, showToast, sidebarOpen, wakeHud,
+    writeChannelOrderMap, writeChannelOrderMode, setHudSub, zapDigits,
+  ]);
 
+  // ── Render ────────────────────────────────────────────────────────────────────
   return (
     <>
       <div id="videoLayer"><video id="video" ref={videoRef} autoPlay playsInline /></div>
 
-      {/* Buffering spinner — visible while channel is loading */}
       <div id="bufferOverlay" className={buffering ? 'show' : ''}>
         <div className="bufferSpin" />
       </div>
 
       <div id="resumeBadge" className={resumeLabel ? 'show' : ''}>{resumeLabel}</div>
 
-      {/* Channel toast */}
       <div id="channelToast" className={channelToast ? 'show' : ''}>{channelToast}</div>
 
-      {/* Number zap overlay */}
       <div id="zapOverlay" className={zapDigits ? 'show' : ''}>
         {zapDigits}
         <div className="zapSub">channel</div>
@@ -1188,17 +642,21 @@ export default function App() {
         }}
       />
 
-      <div id="orderPrompt" className={orderPromptOpen ? 'show' : ''}>
-        <div className={`orderCard${orderPromptError ? ' hasError' : ''}`}>
-          <div className="orderTitle">Set channel order</div>
-          <div className="orderName">{orderPromptTarget?.name || 'Channel'}</div>
-          <div className={`orderDigits${orderPromptError ? ' hasError' : ''}`}>{orderPromptDigits || '—'}</div>
-          <div className="orderHelp">Use number keys, OK to save (empty = no change), Back to edit</div>
-          {orderPromptError && <div className="orderErr">{orderPromptError}</div>}
-        </div>
-      </div>
+      <OrderPrompt
+        open={orderPromptOpen}
+        digits={orderPromptDigits}
+        target={orderPromptTarget}
+        error={orderPromptError}
+      />
 
-      <Hud title={hudTitle} subtitle={hudSub} hidden={hudHidden || settingsOpen} onOpenSettings={() => setSettingsOpen(true)} keyIndicator={keyIndicator} epg={epg} />
+      <Hud
+        title={hudTitle}
+        subtitle={hudSub}
+        hidden={hudHidden || settingsOpen}
+        onOpenSettings={() => setSettingsOpen(true)}
+        keyIndicator={keyIndicator}
+        epg={epg}
+      />
 
       <SettingsOverlay
         open={settingsOpen}
