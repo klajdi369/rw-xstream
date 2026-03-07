@@ -9,8 +9,13 @@ import { Category, Channel, LastChannel } from './types/player';
 const SAVE_KEY = 'xtream_tv_v4';
 const LAST_KEY = 'xtream_last_ch';
 const CHANNEL_PROXY_MEMORY_KEY = 'xtream_channel_proxy_memory_v1';
+const CHANNEL_ORDER_KEY = 'xtream_channel_custom_order_v1';
+const CHANNEL_ORDER_MODE_KEY = 'xtream_channel_order_mode_v1';
 const CHANNEL_PROXY_MAX_VISITS = 6;
 const CHANNEL_ROW_JUMP = 8;
+const HIDE_CATEGORIES = true;
+const CATEGORY_UNLOCK_PRESS_COUNT = 4;
+const CATEGORY_UNLOCK_WINDOW_MS = 1400;
 
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 
@@ -59,6 +64,14 @@ export default function App() {
   const [allCategories, setAllCategories] = React.useState<Category[]>([]);
   const [categories, setCategories] = React.useState<Category[]>([]);
   const [channels, setChannels] = React.useState<Channel[]>([]);
+  const [channelOrderMap, setChannelOrderMap] = React.useState<Record<string, Record<string, number>>>({});
+  const [customOrderInList, setCustomOrderInList] = React.useState(true);
+  const [orderPromptOpen, setOrderPromptOpen] = React.useState(false);
+  const [orderPromptDigits, setOrderPromptDigits] = React.useState('');
+  const [orderPromptReplaceOnDigit, setOrderPromptReplaceOnDigit] = React.useState(false);
+  const [orderPromptTarget, setOrderPromptTarget] = React.useState<{ streamId: string; name: string; catId: string } | null>(null);
+  const [orderPromptError, setOrderPromptError] = React.useState('');
+  const [showAllCategories, setShowAllCategories] = React.useState(false);
   const [selCat, setSelCat] = React.useState(0);
   const [selCh, setSelCh] = React.useState(0);
   const [catQuery, setCatQuery] = React.useState('');
@@ -77,6 +90,7 @@ export default function App() {
   const zapTimerRef = React.useRef<any>(null);
   const [keyIndicator, setKeyIndicator] = React.useState('');
   const keyIndicatorTimerRef = React.useRef<any>(null);
+  const orderKeySeqRef = React.useRef<{ count: number; until: number }>({ count: 0, until: 0 });
 
   const cacheRef = React.useRef<Map<string, Channel[]>>(new Map());
   const activeCatRef = React.useRef<string>('');
@@ -116,6 +130,85 @@ export default function App() {
       return {};
     }
   }, []);
+
+  const readChannelOrderMap = React.useCallback(() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(CHANNEL_ORDER_KEY) || '{}');
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }, []);
+
+  const writeChannelOrderMap = React.useCallback((next: Record<string, Record<string, number>>) => {
+    localStorage.setItem(CHANNEL_ORDER_KEY, JSON.stringify(next));
+    setChannelOrderMap(next);
+  }, []);
+
+
+  const readChannelOrderMode = React.useCallback(() => {
+    try {
+      const raw = localStorage.getItem(CHANNEL_ORDER_MODE_KEY);
+      if (raw == null) return true;
+      return raw !== 'default';
+    } catch {
+      return true;
+    }
+  }, []);
+
+  const writeChannelOrderMode = React.useCallback((isCustom: boolean) => {
+    localStorage.setItem(CHANNEL_ORDER_MODE_KEY, isCustom ? 'custom' : 'default');
+    setCustomOrderInList(isCustom);
+  }, []);
+
+  const sortWithCustomOrder = React.useCallback((list: Channel[], catId: string, enabled: boolean) => {
+    if (!enabled) return list;
+    const orders = channelOrderMap[catId] || {};
+    const total = list.length;
+    if (!total) return list;
+
+    const withMeta = list.map((ch, index) => {
+      const raw = Number(orders[String(ch.stream_id)]);
+      const hasOrder = Number.isFinite(raw) && raw > 0;
+      const order = hasOrder ? clamp(Math.floor(raw), 1, total) : 0;
+      return { ch, index, hasOrder, order };
+    });
+
+    const pinned = withMeta
+      .filter((item) => item.hasOrder)
+      .sort((a, b) => (a.order - b.order) || (a.index - b.index));
+
+    const unpinned = withMeta.filter((item) => !item.hasOrder);
+    const result: Channel[] = new Array(total);
+    const used = new Set<number>();
+
+    for (const item of pinned) {
+      let pos = item.order - 1;
+      while (pos < total && used.has(pos)) pos += 1;
+      if (pos >= total) {
+        pos = 0;
+        while (pos < total && used.has(pos)) pos += 1;
+      }
+      if (pos >= total) break;
+      result[pos] = item.ch;
+      used.add(pos);
+    }
+
+    let u = 0;
+    for (let i = 0; i < total; i += 1) {
+      if (used.has(i)) continue;
+      result[i] = unpinned[u].ch;
+      u += 1;
+    }
+
+    return result;
+  }, [channelOrderMap]);
+
+  const customOrderedChannels = React.useMemo(() => sortWithCustomOrder(channels, activeCatRef.current || '', true), [channels, sortWithCustomOrder]);
+  const channelList = React.useMemo(
+    () => sortWithCustomOrder(channels, activeCatRef.current || '', customOrderInList),
+    [channels, customOrderInList, sortWithCustomOrder],
+  );
 
   const writeChannelProxyMemory = React.useCallback((next: Record<string, { useProxy: boolean; visits: number }>) => {
     localStorage.setItem(CHANNEL_PROXY_MEMORY_KEY, JSON.stringify(next));
@@ -650,9 +743,10 @@ export default function App() {
       const all = (Array.isArray(raw) ? raw : []) as Category[];
       all.sort((a, b) => Number(a.category_id) - Number(b.category_id));
       const filtered = all.filter((c) => String(c.category_name || '').toUpperCase().includes('ALBANIA'));
+      const scopedCategories = HIDE_CATEGORIES ? filtered.slice(0, 1) : filtered;
 
       setAllCategories(filtered);
-      setCategories(filtered);
+      setCategories(HIDE_CATEGORIES && !showAllCategories ? scopedCategories : filtered);
       setSelCat(0);
       setChQuery('');
       cacheRef.current.clear();
@@ -671,19 +765,19 @@ export default function App() {
       setConnectProgress(70);
       setSettingsProgress(70);
 
-      if (filtered[0]) await loadCategory(filtered[0], true);
+      if (scopedCategories[0]) await loadCategory(scopedCategories[0], true);
 
       setConnectProgress(90);
       setSettingsProgress(90);
 
       const last: LastChannel | null = JSON.parse(localStorage.getItem(LAST_KEY) || 'null');
       if (last && remember) {
-        const cat = filtered.find((c) => String(c.category_id) === String(last.catId)) || filtered[0];
+        const cat = scopedCategories.find((c) => String(c.category_id) === String(last.catId)) || scopedCategories[0];
         if (cat) {
           await loadCategory(cat, false);
           const list = cacheRef.current.get(String(cat.category_id)) || [];
           const idx = list.findIndex((c) => String(c.stream_id) === String(last.streamId));
-          const catIdx = filtered.findIndex((c) => String(c.category_id) === String(cat.category_id));
+          const catIdx = scopedCategories.findIndex((c) => String(c.category_id) === String(cat.category_id));
           setSelCat(catIdx >= 0 ? catIdx : 0);
           if (idx >= 0) {
             setSelCh(idx);
@@ -697,7 +791,8 @@ export default function App() {
       setConnectProgress(100);
       setSettingsProgress(100);
       setSettingsOpen(false);
-      setMsg(`Connected! ${filtered.length} categories.`);
+      const visibleCategoryCount = HIDE_CATEGORIES && !showAllCategories ? scopedCategories.length : filtered.length;
+      setMsg(`Connected! ${visibleCategoryCount} categories.`);
       setMsgIsError(false);
       setHudTitle('Ready');
       setHudSub('OK to open channel list');
@@ -712,7 +807,7 @@ export default function App() {
       setConnecting(false);
       setConnectProgress(0);
     }
-  }, [apiUrl, fmt, jget, loadCategory, pass, playChannel, remember, rememberProxyMode, server, useProxy, user, wakeHud]);
+  }, [apiUrl, fmt, jget, loadCategory, pass, playChannel, remember, rememberProxyMode, server, useProxy, user, wakeHud, showAllCategories]);
 
   React.useEffect(() => {
     const saved: any = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}');
@@ -726,6 +821,9 @@ export default function App() {
 
     if (saved.server && saved.user && saved.pass) setTimeout(() => connect(), 30);
     else setSettingsOpen(true);
+
+    setChannelOrderMap(readChannelOrderMap());
+    setCustomOrderInList(readChannelOrderMode());
 
     return () => {
       stopPlayback();
@@ -744,11 +842,17 @@ export default function App() {
   }, [hudHidden, settingsOpen, sidebarOpen]);
 
   React.useEffect(() => {
+    if (HIDE_CATEGORIES && !showAllCategories) {
+      setCategories(allCategories.slice(0, 1));
+      setSelCat(0);
+      return;
+    }
+
     const q = catQuery.trim().toLowerCase();
     const filtered = q ? allCategories.filter((c) => String(c.category_name || '').toLowerCase().includes(q)) : allCategories;
     setCategories(filtered);
     setSelCat(0);
-  }, [allCategories, catQuery]);
+  }, [allCategories, catQuery, showAllCategories]);
 
   React.useEffect(() => {
     const cat = categories[selCat];
@@ -759,29 +863,91 @@ export default function App() {
   // Number zap: type digits to jump to a channel number
   const executeZap = React.useCallback((digits: string) => {
     const num = parseInt(digits, 10);
-    if (isNaN(num) || num < 1 || !channels.length) return;
-    const idx = clamp(num - 1, 0, channels.length - 1);
+    if (isNaN(num) || num < 1 || !customOrderedChannels.length) return;
+    const idx = clamp(num - 1, 0, customOrderedChannels.length - 1);
     setSelCh(idx);
-    const ch = channels[idx];
+    const ch = customOrderedChannels[idx];
     if (ch) {
       playChannel(ch);
       showToast(ch.name || `Channel ${num}`);
     }
-  }, [channels, playChannel, showToast]);
+  }, [customOrderedChannels, playChannel, showToast]);
 
   const moveByChannelRow = React.useCallback((dir: 1 | -1) => {
+    const navChannels = sidebarOpen && focus === 'channels' ? channelList : customOrderedChannels;
     const step = CHANNEL_ROW_JUMP * dir;
-    const n = clamp(selCh + step, 0, Math.max(0, channels.length - 1));
+    const n = clamp(selCh + step, 0, Math.max(0, navChannels.length - 1));
     setSelCh(n);
-    if (channels[n]) {
-      playChannel(channels[n]);
-      showToast(channels[n].name || 'Channel');
+    if (navChannels[n]) {
+      playChannel(navChannels[n]);
+      showToast(navChannels[n].name || 'Channel');
     }
-  }, [channels, playChannel, selCh, showToast]);
+  }, [channelList, customOrderedChannels, focus, playChannel, selCh, showToast, sidebarOpen]);
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       showKeyIndicator(e.key);
+      const isOrderButton = ['ColorF3Blue', 'Blue', 'NumLock'].includes(e.key);
+
+      if (orderPromptOpen) {
+        if (e.key >= '0' && e.key <= '9') {
+          e.preventDefault();
+          setOrderPromptDigits((v) => (orderPromptReplaceOnDigit ? e.key : (v + e.key).slice(0, 4)));
+          setOrderPromptReplaceOnDigit(false);
+          if (orderPromptError) setOrderPromptError('');
+          return;
+        }
+        if (e.key === 'Backspace') {
+          e.preventDefault();
+          if (orderPromptReplaceOnDigit) {
+            setOrderPromptDigits('');
+            setOrderPromptReplaceOnDigit(false);
+            if (orderPromptError) setOrderPromptError('');
+          } else {
+            setOrderPromptDigits((v) => v.slice(0, -1));
+            if (orderPromptError) setOrderPromptError('');
+          }
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setOrderPromptOpen(false);
+          setOrderPromptDigits('');
+          setOrderPromptReplaceOnDigit(false);
+          setOrderPromptTarget(null);
+          setOrderPromptError('');
+          return;
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const order = parseInt(orderPromptDigits, 10);
+          if (!isNaN(order) && order > 0 && orderPromptTarget) {
+            const catId = orderPromptTarget.catId || activeCatRef.current || '';
+            const catOrders = channelOrderMap[catId] || {};
+            const duplicateEntry = Object.entries(catOrders).find(([streamId, pos]) => (
+              String(streamId) !== orderPromptTarget.streamId && Number(pos) === order
+            ));
+
+            if (duplicateEntry) {
+              setOrderPromptError('Enter another number');
+              return;
+            }
+
+            const next = { ...channelOrderMap };
+            next[catId] = { ...(next[catId] || {}), [orderPromptTarget.streamId]: order };
+            writeChannelOrderMap(next);
+            setHudSub(`Set ${orderPromptTarget.name} to order #${order}`);
+            wakeHud();
+          }
+          setOrderPromptOpen(false);
+          setOrderPromptDigits('');
+          setOrderPromptReplaceOnDigit(false);
+          setOrderPromptTarget(null);
+          setOrderPromptError('');
+          return;
+        }
+      }
+
       if (settingsOpen) {
         if (e.key === 'Escape' || e.key === 'Backspace') setSettingsOpen(false);
         if (e.key === 'Enter') connect();
@@ -804,6 +970,59 @@ export default function App() {
 
       wakeHud();
 
+      if (isOrderButton) {
+        e.preventDefault();
+
+        if (HIDE_CATEGORIES && sidebarOpen && !settingsOpen && !orderPromptOpen) {
+          const now = Date.now();
+          const seq = orderKeySeqRef.current;
+          const nextCount = now <= seq.until ? seq.count + 1 : 1;
+          orderKeySeqRef.current = { count: nextCount, until: now + CATEGORY_UNLOCK_WINDOW_MS };
+
+          if (nextCount >= CATEGORY_UNLOCK_PRESS_COUNT) {
+            orderKeySeqRef.current = { count: 0, until: 0 };
+            const unlocking = !showAllCategories;
+            setShowAllCategories(unlocking);
+            setHudSub(unlocking ? 'Category list unlocked' : 'Category list hidden');
+            if (unlocking) {
+              setFocus('categories');
+            } else {
+              setFocus('channels');
+              setSelCat(0);
+            }
+            wakeHud();
+            return;
+          }
+        }
+
+        if (sidebarOpen && focus === 'channels') {
+          const next = !customOrderInList;
+          writeChannelOrderMode(next);
+          setHudSub(next ? 'Channel list: custom order' : 'Channel list: default order');
+          return;
+        }
+
+        const target = (sidebarOpen ? channelList[selCh] : null)
+          || channels.find((c) => String(c.stream_id) === playingId)
+          || customOrderedChannels[selCh]
+          || customOrderedChannels[0];
+
+        if (target) {
+          const catId = activeCatRef.current || '';
+          const prevOrder = channelOrderMap[catId]?.[String(target.stream_id)];
+          setOrderPromptTarget({
+            streamId: String(target.stream_id),
+            name: target.name || 'Channel',
+            catId,
+          });
+          setOrderPromptDigits(prevOrder ? String(prevOrder) : '');
+          setOrderPromptReplaceOnDigit(Boolean(prevOrder));
+          setOrderPromptError('');
+          setOrderPromptOpen(true);
+        }
+        return;
+      }
+
       if (!sidebarOpen) {
         if (['PageUp', 'ChannelUp', 'MediaTrackPrevious'].includes(e.key)) {
           e.preventDefault();
@@ -818,8 +1037,8 @@ export default function App() {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           // Snap selection to the currently playing channel
-          if (playingId && channels.length) {
-            const playIdx = channels.findIndex((c) => String(c.stream_id) === playingId);
+          if (playingId && customOrderedChannels.length) {
+            const playIdx = customOrderedChannels.findIndex((c) => String(c.stream_id) === playingId);
             if (playIdx >= 0) setSelCh(playIdx);
           }
           setSidebarOpen(true);
@@ -828,21 +1047,21 @@ export default function App() {
         }
         if (e.key === 'ArrowUp') {
           e.preventDefault();
-          const n = clamp(selCh - 1, 0, Math.max(0, channels.length - 1));
+          const n = clamp(selCh - 1, 0, Math.max(0, customOrderedChannels.length - 1));
           setSelCh(n);
-          if (channels[n]) {
-            playChannel(channels[n]);
-            showToast(channels[n].name || 'Channel');
+          if (customOrderedChannels[n]) {
+            playChannel(customOrderedChannels[n]);
+            showToast(customOrderedChannels[n].name || 'Channel');
           }
           return;
         }
         if (e.key === 'ArrowDown') {
           e.preventDefault();
-          const n = clamp(selCh + 1, 0, Math.max(0, channels.length - 1));
+          const n = clamp(selCh + 1, 0, Math.max(0, customOrderedChannels.length - 1));
           setSelCh(n);
-          if (channels[n]) {
-            playChannel(channels[n]);
-            showToast(channels[n].name || 'Channel');
+          if (customOrderedChannels[n]) {
+            playChannel(customOrderedChannels[n]);
+            showToast(customOrderedChannels[n].name || 'Channel');
           }
         }
         return;
@@ -850,16 +1069,16 @@ export default function App() {
 
       if (e.key === 'Escape' || e.key === 'Backspace') {
         e.preventDefault();
-        if (focus === 'categories') setFocus('channels');
+        if (!HIDE_CATEGORIES && focus === 'categories') setFocus('channels');
         else setSidebarOpen(false);
         return;
       }
 
-      if (e.key === 'ArrowLeft' && focus === 'channels') {
+      if (!HIDE_CATEGORIES && e.key === 'ArrowLeft' && focus === 'channels') {
         e.preventDefault();
         return setFocus('categories');
       }
-      if (e.key === 'ArrowRight' && focus === 'categories') {
+      if (!HIDE_CATEGORIES && e.key === 'ArrowRight' && focus === 'categories') {
         e.preventDefault();
         return setFocus('channels');
       }
@@ -887,7 +1106,7 @@ export default function App() {
           const next = clamp(selCat - 1, 0, Math.max(0, categories.length - 1));
           setSelCat(next);
         } else {
-          setSelCh((v) => clamp(v - 1, 0, Math.max(0, channels.length - 1)));
+          setSelCh((v) => clamp(v - 1, 0, Math.max(0, channelList.length - 1)));
         }
       }
       if (e.key === 'ArrowDown') {
@@ -896,7 +1115,7 @@ export default function App() {
           const next = clamp(selCat + 1, 0, Math.max(0, categories.length - 1));
           setSelCat(next);
         } else {
-          setSelCh((v) => clamp(v + 1, 0, Math.max(0, channels.length - 1)));
+          setSelCh((v) => clamp(v + 1, 0, Math.max(0, channelList.length - 1)));
         }
       }
       if (e.key === 'Enter' || e.key === ' ') {
@@ -905,8 +1124,8 @@ export default function App() {
           const cat = categories[selCat];
           if (cat) loadCategory(cat, true);
           setFocus('channels');
-        } else if (channels[selCh]) {
-          playChannel(channels[selCh]);
+        } else if (channelList[selCh]) {
+          playChannel(channelList[selCh]);
           setSidebarOpen(false);
         }
       }
@@ -914,7 +1133,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [categories, channels, connect, executeZap, focus, loadCategory, moveByChannelRow, playChannel, playingId, selCat, selCh, settingsOpen, showKeyIndicator, showToast, sidebarOpen, wakeHud, zapDigits]);
+  }, [categories, channelList, channelOrderMap, channels, connect, customOrderInList, customOrderedChannels, executeZap, focus, loadCategory, moveByChannelRow, orderPromptDigits, orderPromptError, orderPromptOpen, orderPromptReplaceOnDigit, orderPromptTarget, playChannel, playingId, selCat, selCh, settingsOpen, showAllCategories, showKeyIndicator, showToast, sidebarOpen, wakeHud, writeChannelOrderMap, writeChannelOrderMode, zapDigits]);
 
   return (
     <>
@@ -942,16 +1161,19 @@ export default function App() {
         open={sidebarOpen}
         focus={focus}
         categories={categories}
-        channels={channels}
+        showCategories={!HIDE_CATEGORIES || showAllCategories}
+        channels={channelList}
         selectedCategory={selCat}
         selectedChannel={selCh}
         categoryQuery={catQuery}
         channelQuery={chQuery}
         playingId={playingId}
         activeCategoryName={activeCatName}
-        onCategoryQuery={setCatQuery}
+        channelOrderModeLabel={customOrderInList ? 'Custom' : 'Default'}
+        onCategoryQuery={(value) => { if (!HIDE_CATEGORIES || showAllCategories) setCatQuery(value); }}
         onChannelQuery={setChQuery}
         onPickCategory={async (i) => {
+          if (HIDE_CATEGORIES && !showAllCategories) return;
           setSelCat(i);
           const cat = categories[i];
           if (cat) await loadCategory(cat, true);
@@ -959,12 +1181,22 @@ export default function App() {
         }}
         onPickChannel={(i) => {
           setSelCh(i);
-          if (channels[i]) {
-            playChannel(channels[i]);
+          if (channelList[i]) {
+            playChannel(channelList[i]);
             setSidebarOpen(false);
           }
         }}
       />
+
+      <div id="orderPrompt" className={orderPromptOpen ? 'show' : ''}>
+        <div className={`orderCard${orderPromptError ? ' hasError' : ''}`}>
+          <div className="orderTitle">Set channel order</div>
+          <div className="orderName">{orderPromptTarget?.name || 'Channel'}</div>
+          <div className={`orderDigits${orderPromptError ? ' hasError' : ''}`}>{orderPromptDigits || '—'}</div>
+          <div className="orderHelp">Use number keys, OK to save (empty = no change), Back to edit</div>
+          {orderPromptError && <div className="orderErr">{orderPromptError}</div>}
+        </div>
+      </div>
 
       <Hud title={hudTitle} subtitle={hudSub} hidden={hudHidden || settingsOpen} onOpenSettings={() => setSettingsOpen(true)} keyIndicator={keyIndicator} epg={epg} />
 
