@@ -13,7 +13,7 @@ const CHANNEL_ORDER_KEY = 'xtream_channel_custom_order_v1';
 const CHANNEL_ORDER_MODE_KEY = 'xtream_channel_order_mode_v1';
 const CHANNEL_PROXY_MAX_VISITS = 6;
 const CHANNEL_ROW_JUMP = 8;
-const HIDE_CATEGORIES = true;
+const HIDE_CATEGORIES = false;
 const CATEGORY_UNLOCK_PRESS_COUNT = 4;
 const CATEGORY_UNLOCK_WINDOW_MS = 1400;
 
