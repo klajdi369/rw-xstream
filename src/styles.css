@@ -519,17 +519,3 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   color: rgba(232, 240, 250, .62);
   font-size: 14px;
 }
-.orderCard.hasError {
-  border-color: rgba(255, 92, 92, .8);
-  box-shadow: 0 0 0 2px rgba(255, 92, 92, .22), 0 12px 44px rgba(0, 0, 0, .55);
-}
-.orderDigits.hasError {
-  color: #ff8f8f;
-  text-shadow: 0 0 16px rgba(255, 92, 92, .65);
-}
-.orderErr {
-  margin-top: 10px;
-  color: #ff8f8f;
-  font-size: 15px;
-  font-weight: 700;
-}
