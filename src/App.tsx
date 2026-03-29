@@ -298,6 +298,28 @@ export default function App() {
     const s = value == null ? '' : String(value).trim();
     if (!s) return 0;
 
+    const xmltvMatch = s.match(
+      /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(?:\s*([+-]\d{4}|Z))?$/,
+    );
+    if (xmltvMatch) {
+      const [, yy, mo, dd, hh, mm, ss, tzRaw] = xmltvMatch;
+      const baseMs = Date.UTC(
+        Number(yy),
+        Number(mo) - 1,
+        Number(dd),
+        Number(hh),
+        Number(mm),
+        Number(ss),
+      );
+      const tz = tzRaw || '+0000';
+      if (tz === 'Z') return Math.floor(baseMs / 1000);
+      const sign = tz.startsWith('-') ? -1 : 1;
+      const offH = Number(tz.slice(1, 3));
+      const offM = Number(tz.slice(3, 5));
+      const offsetMs = sign * ((offH * 60) + offM) * 60 * 1000;
+      return Math.floor((baseMs - offsetMs) / 1000);
+    }
+
     if (/^\d+$/.test(s)) {
       const n = Number(s);
       if (!Number.isFinite(n) || n <= 0) return 0;
