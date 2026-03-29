@@ -400,6 +400,10 @@ export default function App() {
     });
 
     byChannel.forEach((list) => list.sort((a, b) => a.start - b.start));
+    console.info('[EPG][external] loaded programmes', {
+      url: EXTERNAL_EPG_URL,
+      channelsIndexed: byChannel.size,
+    });
     externalEpgRef.current = { fetchedAt: now, byChannel };
     return byChannel;
   }, [parseEpgTs]);
@@ -417,6 +421,18 @@ export default function App() {
         normalizeChannelKey(channel.name),
       ].filter(Boolean);
       const extEntries = externalKeys.map((k) => extByChannel.get(k)).find((v) => Array.isArray(v) && v.length) || null;
+      const matchedKey = externalKeys.find((k) => {
+        const list = extByChannel.get(k);
+        return Array.isArray(list) && list.length > 0;
+      });
+      console.info('[EPG][match]', {
+        streamId: channel.stream_id,
+        channelName: channel.name,
+        epgChannelId: channel.epg_channel_id || '',
+        normalizedCandidates: externalKeys,
+        matchedKey: matchedKey || null,
+        matchedEntries: matchedKey ? (extByChannel.get(matchedKey)?.length || 0) : 0,
+      });
 
       if (extEntries) {
         const paintExternal = () => {
@@ -448,9 +464,20 @@ export default function App() {
         return;
       }
 
+      console.warn('[EPG][match] no external match, using default EPG', {
+        streamId: channel.stream_id,
+        channelName: channel.name,
+        epgChannelId: channel.epg_channel_id || '',
+        normalizedCandidates: externalKeys,
+      });
       await fetchDefaultEpg(channel.stream_id, requestId);
     } catch {
       if (requestId !== epgRequestRef.current) return;
+      console.warn('[EPG][external] failed, falling back to default EPG', {
+        streamId: channel.stream_id,
+        channelName: channel.name,
+        epgChannelId: channel.epg_channel_id || '',
+      });
       try {
         await fetchDefaultEpg(channel.stream_id, requestId);
       } catch {
