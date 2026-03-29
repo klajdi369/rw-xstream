@@ -6,6 +6,7 @@ export type Category = {
 export type Channel = {
   stream_id: string | number;
   name: string;
+  epg_channel_id?: string | null;
 };
 
 export type LastChannel = {

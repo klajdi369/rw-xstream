@@ -16,6 +16,7 @@ const CHANNEL_ROW_JUMP = 8;
 const HIDE_CATEGORIES = true;
 const CATEGORY_UNLOCK_PRESS_COUNT = 4;
 const CATEGORY_UNLOCK_WINDOW_MS = 1400;
+const EXTERNAL_EPG_URL = 'https://www.open-epg.com/files/albania1.xml';
 
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 
@@ -31,12 +32,19 @@ function fmtTime(ts: number) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
+function normalizeChannelKey(value: any) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+type EpgEntry = { title: string; start: number; end: number };
+
 export default function App() {
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const hlsRef = React.useRef<Hls | null>(null);
   const mtsRef = React.useRef<any>(null);
   const epgIntervalRef = React.useRef<any>(null);
   const epgRequestRef = React.useRef(0);
+  const externalEpgRef = React.useRef<{ fetchedAt: number; byChannel: Map<string, EpgEntry[]> }>({ fetchedAt: 0, byChannel: new Map() });
 
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
@@ -79,7 +87,7 @@ export default function App() {
   const [playingId, setPlayingId] = React.useState<string | null>(null);
   const [buffering, setBuffering] = React.useState(false);
   const [activeCatName, setActiveCatName] = React.useState('Channels');
-  const [epg, setEpg] = React.useState<{ nowTitle: string; nowTime: string; progress: number; next: string } | null>(null);
+  const [epg, setEpg] = React.useState<{ nowTitle: string; nowTime: string; progress: number; next: string; source: 'external' | 'default' } | null>(null);
 
   // Channel toast (shows channel name on zap)
   const [channelToast, setChannelToast] = React.useState('');
@@ -302,78 +310,155 @@ export default function App() {
     return 0;
   }, []);
 
-  const fetchEpg = React.useCallback(async (streamId: string | number) => {
+  const fetchDefaultEpg = React.useCallback(async (streamId: string | number, requestId: number) => {
+    const data: any = await jget(apiUrl({ action: 'get_short_epg', stream_id: String(streamId), limit: '2' }));
+    if (requestId !== epgRequestRef.current) return false;
+
+    const list: any[] = data?.epg_listings || data?.Epg_listings || data?.listings || [];
+    if (!list.length) {
+      setEpg(null);
+      return false;
+    }
+
+    const entries = list
+      .map((e: any) => {
+        const start = parseEpgTs(e.start_timestamp ?? e.start ?? e.start_ts ?? e.begin ?? e.from);
+        const end = parseEpgTs(e.stop_timestamp ?? e.end_timestamp ?? e.end ?? e.stop ?? e.to);
+        return {
+          title: decodePossiblyBase64Utf8(e.title ?? e.name ?? e.programme_title ?? ''),
+          start,
+          end,
+        };
+      })
+      .filter((e: any) => e.start > 0 && e.end > e.start)
+      .sort((a: any, b: any) => a.start - b.start);
+
+    if (!entries.length) {
+      setEpg(null);
+      return false;
+    }
+
+    const paint = () => {
+      if (requestId !== epgRequestRef.current) return;
+      const nowSec = Date.now() / 1000;
+
+      let curIndex = entries.findIndex((e: any) => e.start <= nowSec && e.end > nowSec);
+      if (curIndex < 0) {
+        const firstFutureIndex = entries.findIndex((e: any) => e.start > nowSec);
+        curIndex = firstFutureIndex > 0 ? firstFutureIndex - 1 : entries.length - 1;
+      }
+
+      const cur = entries[curIndex];
+      if (!cur) return;
+
+      const next = entries[curIndex + 1] || null;
+      const dur = Math.max(1, cur.end - cur.start);
+      const progress = Math.min(100, Math.max(0, Math.round(((nowSec - cur.start) / dur) * 100)));
+
+      if (requestId !== epgRequestRef.current) return;
+
+      setEpg({
+        nowTitle: cur.title,
+        nowTime: `${fmtTime(cur.start)} – ${fmtTime(cur.end)}`,
+        progress,
+        next: next ? `Next  ${fmtTime(next.start)}  ${next.title}` : '',
+        source: 'default',
+      });
+    };
+
+    paint();
+    epgIntervalRef.current = setInterval(paint, 30000);
+    return true;
+  }, [apiUrl, decodePossiblyBase64Utf8, jget, parseEpgTs]);
+
+  const ensureExternalEpg = React.useCallback(async () => {
+    const now = Date.now();
+    const cache = externalEpgRef.current;
+    if (cache.byChannel.size > 0 && now - cache.fetchedAt < 10 * 60 * 1000) return cache.byChannel;
+
+    const xmlResp = await fetch(`${backendBaseRef.current}/proxy?url=${encodeURIComponent(EXTERNAL_EPG_URL)}&deint=0`, { cache: 'no-store' });
+    if (!xmlResp.ok) throw new Error(`External EPG HTTP ${xmlResp.status}`);
+    const xmlText = await xmlResp.text();
+    const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+    const parseError = doc.querySelector('parsererror');
+    if (parseError) throw new Error('External EPG parse error');
+
+    const byChannel = new Map<string, EpgEntry[]>();
+    doc.querySelectorAll('programme').forEach((prog) => {
+      const channelRaw = prog.getAttribute('channel') || '';
+      const key = normalizeChannelKey(channelRaw);
+      if (!key) return;
+
+      const title = (prog.querySelector('title')?.textContent || '').trim();
+      const start = parseEpgTs(prog.getAttribute('start') || '');
+      const end = parseEpgTs(prog.getAttribute('stop') || '');
+      if (!title || !start || !end || end <= start) return;
+
+      const list = byChannel.get(key) || [];
+      list.push({ title, start, end });
+      byChannel.set(key, list);
+    });
+
+    byChannel.forEach((list) => list.sort((a, b) => a.start - b.start));
+    externalEpgRef.current = { fetchedAt: now, byChannel };
+    return byChannel;
+  }, [parseEpgTs]);
+
+  const fetchEpg = React.useCallback(async (channel: Channel) => {
     const requestId = epgRequestRef.current + 1;
     epgRequestRef.current = requestId;
 
     stopEpgRefresh();
     try {
-      const data: any = await jget(apiUrl({ action: 'get_short_epg', stream_id: String(streamId), limit: '2' }));
+      const extByChannel = await ensureExternalEpg();
       if (requestId !== epgRequestRef.current) return;
+      const externalKeys = [
+        normalizeChannelKey(channel.epg_channel_id),
+        normalizeChannelKey(channel.name),
+      ].filter(Boolean);
+      const extEntries = externalKeys.map((k) => extByChannel.get(k)).find((v) => Array.isArray(v) && v.length) || null;
 
-      const list: any[] = data?.epg_listings || data?.Epg_listings || data?.listings || [];
-      if (!list.length) {
-        setEpg(null);
+      if (extEntries) {
+        const paintExternal = () => {
+          if (requestId !== epgRequestRef.current) return;
+          const nowSec = Date.now() / 1000;
+          let curIndex = extEntries.findIndex((e) => e.start <= nowSec && e.end > nowSec);
+          if (curIndex < 0) {
+            const firstFutureIndex = extEntries.findIndex((e) => e.start > nowSec);
+            curIndex = firstFutureIndex > 0 ? firstFutureIndex - 1 : Math.max(0, extEntries.length - 1);
+          }
+          const cur = extEntries[curIndex];
+          if (!cur) return;
+
+          const next = extEntries[curIndex + 1] || null;
+          const dur = Math.max(1, cur.end - cur.start);
+          const progress = Math.min(100, Math.max(0, Math.round(((nowSec - cur.start) / dur) * 100)));
+
+          setEpg({
+            nowTitle: cur.title,
+            nowTime: `${fmtTime(cur.start)} – ${fmtTime(cur.end)}`,
+            progress,
+            next: next ? `Next  ${fmtTime(next.start)}  ${next.title}` : '',
+            source: 'external',
+          });
+        };
+
+        paintExternal();
+        epgIntervalRef.current = setInterval(paintExternal, 30000);
         return;
       }
 
-      const entries = list
-        .map((e: any) => {
-          const start = parseEpgTs(e.start_timestamp ?? e.start ?? e.start_ts ?? e.begin ?? e.from);
-          const end = parseEpgTs(e.stop_timestamp ?? e.end_timestamp ?? e.end ?? e.stop ?? e.to);
-          return {
-            title: decodePossiblyBase64Utf8(e.title ?? e.name ?? e.programme_title ?? ''),
-            start,
-            end,
-          };
-        })
-        .filter((e: any) => e.start > 0 && e.end > e.start)
-        .sort((a: any, b: any) => a.start - b.start);
-
-      if (!entries.length) {
-        setEpg(null);
-        return;
-      }
-
-      const paint = () => {
-        if (requestId !== epgRequestRef.current) return;
-        const nowSec = Date.now() / 1000;
-
-        let curIndex = entries.findIndex((e: any) => e.start <= nowSec && e.end > nowSec);
-        if (curIndex < 0) {
-          const firstFutureIndex = entries.findIndex((e: any) => e.start > nowSec);
-          curIndex = firstFutureIndex > 0 ? firstFutureIndex - 1 : entries.length - 1;
-        }
-
-        const cur = entries[curIndex];
-        if (!cur) return;
-
-        const next = entries[curIndex + 1] || null;
-        const dur = Math.max(1, cur.end - cur.start);
-        const progress = Math.min(100, Math.max(0, Math.round(((nowSec - cur.start) / dur) * 100)));
-
-        if (requestId !== epgRequestRef.current) return;
-
-        setEpg({
-          nowTitle: cur.title,
-          nowTime: `${fmtTime(cur.start)} – ${fmtTime(cur.end)}`,
-          progress,
-          next: next ? `Next  ${fmtTime(next.start)}  ${next.title}` : '',
-        });
-
-        if (!next && nowSec >= cur.end - 10 && requestId === epgRequestRef.current) {
-          void fetchEpg(streamId);
-        }
-      };
-
-      paint();
-      epgIntervalRef.current = setInterval(paint, 30000);
+      await fetchDefaultEpg(channel.stream_id, requestId);
     } catch {
       if (requestId !== epgRequestRef.current) return;
-      stopEpgRefresh();
-      setEpg(null);
+      try {
+        await fetchDefaultEpg(channel.stream_id, requestId);
+      } catch {
+        stopEpgRefresh();
+        setEpg(null);
+      }
     }
-  }, [apiUrl, decodePossiblyBase64Utf8, jget, parseEpgTs, stopEpgRefresh]);
+  }, [ensureExternalEpg, fetchDefaultEpg, stopEpgRefresh]);
 
 
   const preloadNearbyChannels = React.useCallback((list: Channel[], centerIndex: number) => {
@@ -501,7 +586,7 @@ export default function App() {
     setPlayingId(String(ch.stream_id));
     setBuffering(true);
     setHudTitle(ch.name || 'Playing');
-    void fetchEpg(ch.stream_id);
+    void fetchEpg(ch);
 
     const currentIndex = channels.findIndex((c) => String(c.stream_id) === String(ch.stream_id));
     if (currentIndex >= 0) preloadNearbyChannels(channels, currentIndex);
