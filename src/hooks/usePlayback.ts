@@ -27,7 +27,7 @@ interface UsePlaybackOptions {
   rememberProxyMode: boolean;
   remember: boolean;
   channels: Channel[];
-  fetchEpg: (id: string | number) => Promise<void>;
+  fetchEpg: (id: string | number, epgChannelId?: string | null, channelName?: string) => Promise<void>;
   clearEpg: () => void;
   stopEpgRefresh: () => void;
   readChannelProxyMemory: () => ProxyMemoryMap;
@@ -186,7 +186,7 @@ export function usePlayback({
     setPlayingId(String(ch.stream_id));
     setBuffering(true);
     setHudTitle(ch.name || 'Playing');
-    void fetchEpg(ch.stream_id);
+    void fetchEpg(ch.stream_id, ch.epg_channel_id, ch.name);
 
     const currentIndex = channels.findIndex((c) => String(c.stream_id) === String(ch.stream_id));
     if (currentIndex >= 0) preloadNearbyChannels(channels, currentIndex);

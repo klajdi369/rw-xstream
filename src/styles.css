@@ -81,6 +81,20 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   font-size: 14px; color: rgba(232, 240, 250, .55);
   white-space: nowrap; flex-shrink: 0;
 }
+.epgSrc {
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, .25);
+  color: rgba(232, 240, 250, .65);
+  letter-spacing: .3px;
+  flex-shrink: 0;
+}
+.epgSrc.external {
+  color: rgba(29, 209, 161, .92);
+  border-color: rgba(29, 209, 161, .55);
+}
 .epgBar {
   height: 4px; background: rgba(255, 255, 255, .10);
   border-radius: 2px; margin-bottom: 8px; overflow: hidden;

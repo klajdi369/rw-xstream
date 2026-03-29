@@ -50,6 +50,32 @@ export function parseEpgTs(value: unknown): number {
     return n > 1e12 ? Math.floor(n / 1000) : Math.floor(n);
   }
 
+  // XMLTV timestamps: YYYYMMDDHHMMSS +0000 / -0300 / Z
+  const xmltv = s.match(
+    /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(?:\s*(Z|[+-]\d{4}))?$/,
+  );
+  if (xmltv) {
+    const [, yy, mm, dd, hh, mi, ss, tzRaw] = xmltv;
+    const baseUtcSec = Date.UTC(
+      Number(yy),
+      Number(mm) - 1,
+      Number(dd),
+      Number(hh),
+      Number(mi),
+      Number(ss),
+    ) / 1000;
+    if (!Number.isFinite(baseUtcSec)) return 0;
+
+    if (!tzRaw || tzRaw === 'Z') return Math.floor(baseUtcSec);
+
+    const sign = tzRaw.startsWith('+') ? 1 : -1;
+    const tzh = Number(tzRaw.slice(1, 3));
+    const tzm = Number(tzRaw.slice(3, 5));
+    if (!Number.isFinite(tzh) || !Number.isFinite(tzm)) return 0;
+    const offsetSec = sign * ((tzh * 60 + tzm) * 60);
+    return Math.floor(baseUtcSec - offsetSec);
+  }
+
   const normalized = s.includes('T') ? s : s.replace(' ', 'T');
   const ms = Date.parse(normalized);
   if (!Number.isNaN(ms)) return Math.floor(ms / 1000);

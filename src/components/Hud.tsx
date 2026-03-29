@@ -11,6 +11,7 @@ type Props = {
     nowTime: string;
     progress: number;
     next: string;
+    source: 'external' | 'default';
   } | null;
 };
 
@@ -24,6 +25,9 @@ export function Hud({ title, subtitle, hidden, onOpenSettings, keyIndicator, epg
           <div className="epgNow">
             <span className="epgNowTitle">{epg?.nowTitle ?? ''}</span>
             <span className="epgTime">{epg?.nowTime ?? ''}</span>
+            <span className={`epgSrc ${epg?.source === 'external' ? 'external' : 'default'}`}>
+              {epg?.source === 'external' ? 'EXT' : 'DEF'}
+            </span>
           </div>
           <div className="epgBar"><div className="epgBarFill" style={{ width: `${epg?.progress ?? 0}%` }} /></div>
           <div className="epgNext">{epg?.next ?? ''}</div>
