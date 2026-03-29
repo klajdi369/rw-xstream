@@ -113,7 +113,11 @@ export default function App() {
   }, []);
 
   // ── EPG ───────────────────────────────────────────────────────────────────────
-  const { epg, fetchEpg, clearEpg, stopEpgRefresh } = useEpg({ apiUrl, jget });
+  const { epg, fetchEpg, clearEpg, stopEpgRefresh } = useEpg({
+    apiUrl,
+    jget,
+    backendBaseUrl: backendBaseRef.current,
+  });
 
   // ── Playback ──────────────────────────────────────────────────────────────────
   const { playingId, buffering, playChannel, stopPlayback } = usePlayback({

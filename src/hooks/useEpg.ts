@@ -12,13 +12,20 @@ export interface EpgEntry {
 interface UseEpgOptions {
   apiUrl: (params: Record<string, string>) => string;
   jget: (url: string) => Promise<unknown>;
+  backendBaseUrl: string;
 }
 
-export function useEpg({ apiUrl, jget }: UseEpgOptions) {
+const EXTERNAL_EPG_URL = 'https://www.open-epg.com/files/albania1.xml';
+const EXTERNAL_EPG_TTL_MS = 10 * 60 * 1000;
+
+export function useEpg({ apiUrl, jget, backendBaseUrl }: UseEpgOptions) {
   const [epg, setEpg] = React.useState<EpgEntry | null>(null);
   const epgIntervalRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
   const epgRequestRef = React.useRef(0);
-  const externalEpgRef = React.useRef<Map<string, { title: string; start: number; end: number }[]> | null>(null);
+  const externalEpgRef = React.useRef<{ fetchedAt: number; byChannel: Map<string, { title: string; start: number; end: number }[]> }>({
+    fetchedAt: 0,
+    byChannel: new Map(),
+  });
   const externalEpgLoadRef = React.useRef<Promise<Map<string, { title: string; start: number; end: number }[]> | null> | null>(null);
 
   const normalizeChannelKey = React.useCallback((value: unknown): string => {
@@ -28,12 +35,16 @@ export function useEpg({ apiUrl, jget }: UseEpgOptions) {
   }, []);
 
   const loadExternalEpg = React.useCallback(async () => {
-    if (externalEpgRef.current) return externalEpgRef.current;
+    const cache = externalEpgRef.current;
+    if (cache.byChannel.size > 0 && (Date.now() - cache.fetchedAt) < EXTERNAL_EPG_TTL_MS) {
+      return cache.byChannel;
+    }
     if (externalEpgLoadRef.current) return externalEpgLoadRef.current;
 
     externalEpgLoadRef.current = (async () => {
       try {
-        const res = await fetch('https://www.open-epg.com/files/albania1.xml');
+        const proxiedUrl = `${backendBaseUrl}/proxy?url=${encodeURIComponent(EXTERNAL_EPG_URL)}&deint=0`;
+        const res = await fetch(proxiedUrl, { cache: 'no-store' });
         if (!res.ok) throw new Error(`EPG XML HTTP ${res.status}`);
         const xml = await res.text();
         const doc = new DOMParser().parseFromString(xml, 'application/xml');
@@ -61,18 +72,17 @@ export function useEpg({ apiUrl, jget }: UseEpgOptions) {
           byChannel.set(key, list);
         });
 
-        externalEpgRef.current = byChannel;
+        externalEpgRef.current = { fetchedAt: Date.now(), byChannel };
         return byChannel;
       } catch {
-        externalEpgRef.current = null;
-        return null;
+        return externalEpgRef.current.byChannel.size ? externalEpgRef.current.byChannel : null;
       } finally {
         externalEpgLoadRef.current = null;
       }
     })();
 
     return externalEpgLoadRef.current;
-  }, [normalizeChannelKey]);
+  }, [backendBaseUrl, normalizeChannelKey]);
 
   const stopEpgRefresh = React.useCallback(() => {
     if (epgIntervalRef.current) clearInterval(epgIntervalRef.current);
