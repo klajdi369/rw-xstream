@@ -23,6 +23,12 @@ export async function handleProxy(req, res, url, PORT) {
     return send(res, 400, 'text/plain; charset=utf-8', 'Unsupported protocol');
   }
 
+  // Abort the upstream fetch when the client goes away, so an abandoned zap
+  // doesn't keep a socket (and the provider's bandwidth) open until timeout.
+  const ac = new AbortController();
+  const onClientClose = () => ac.abort();
+  res.on('close', onClientClose);
+
   try {
     const hdrs = passthroughHeaders(req.headers);
     if (cookieFromQuery) hdrs.cookie = cookieFromQuery;
@@ -30,7 +36,7 @@ export async function handleProxy(req, res, url, PORT) {
     delete hdrs.origin;
     delete hdrs.referer;
 
-    const doFetch = () => fetch(targetUrl, { method: 'GET', headers: { ...hdrs }, redirect: 'follow' });
+    const doFetch = () => fetch(targetUrl, { method: 'GET', headers: { ...hdrs }, redirect: 'follow', signal: ac.signal });
 
     let upstream = await doFetch();
 
@@ -76,6 +82,15 @@ export async function handleProxy(req, res, url, PORT) {
 
     const body = Readable.fromWeb(upstream.body);
 
+    // pipe() only guards the destination — an upstream reset mid-stream emits
+    // 'error' on the source, which crashes the process if left unhandled.
+    body.on('error', () => {
+      if (!res.headersSent) send(res, 502, 'text/plain; charset=utf-8', 'Upstream stream error');
+      else res.destroy();
+    });
+    // If the client hangs up, tear down the upstream read too.
+    res.on('close', () => body.destroy());
+
     if (isTs && deint) {
       return proxyViaFfmpeg(body, res);
     }
@@ -87,6 +102,7 @@ export async function handleProxy(req, res, url, PORT) {
     });
     body.pipe(res);
   } catch (err) {
+    if (err?.name === 'AbortError') return; // client disconnected — nothing to send
     send(res, 502, 'text/plain; charset=utf-8', `Proxy error: ${err?.message || String(err)}`);
   }
 }

@@ -1,5 +1,14 @@
 export function send(res, status, type, body) {
-  res.writeHead(status, { 'Content-Type': type });
+  if (res.headersSent) {
+    // Headers already went out (e.g. a stream started before an error was
+    // hit). Writing them again throws; just end the response instead.
+    res.end(body);
+    return;
+  }
+  res.writeHead(status, {
+    'Content-Type': type,
+    'Access-Control-Allow-Origin': '*',
+  });
   res.end(body);
 }
 

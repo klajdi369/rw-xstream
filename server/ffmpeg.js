@@ -24,19 +24,44 @@ const FFMPEG_BASE_ARGS = [
   '-flags', 'low_delay',
 ];
 
-function attachCleanupHandlers(ffmpeg, res) {
-  const cleanup = () => ffmpeg.kill('SIGKILL');
+// Pipe ffmpeg's output to the response, but only commit a 200 once ffmpeg has
+// actually produced a byte. If it dies first (missing binary, codec failure,
+// upstream 403), we can still send a real error status instead of a 200 with a
+// garbage/empty body.
+function pipeFfmpegToResponse(ffmpeg, res, contentType) {
+  let started = false;
+
+  const begin = () => {
+    if (started || res.headersSent) return;
+    started = true;
+    res.writeHead(200, {
+      'Content-Type': contentType,
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'Access-Control-Allow-Origin': '*',
+    });
+  };
+
+  const kill = () => ffmpeg.kill('SIGKILL');
+
+  // Register before pipe() so headers are written ahead of the first chunk.
+  ffmpeg.stdout.once('data', begin);
+  ffmpeg.stdout.on('error', () => {});
+  ffmpeg.stdout.pipe(res);
 
   ffmpeg.on('error', () => {
     if (!res.headersSent) send(res, 500, 'text/plain; charset=utf-8', 'ffmpeg unavailable');
-    cleanup();
+    kill();
   });
 
   ffmpeg.on('close', (code) => {
-    if (code !== 0 && !res.writableEnded) res.end();
+    if (!started && !res.headersSent) {
+      send(res, 502, 'text/plain; charset=utf-8', `ffmpeg exited with code ${code}`);
+    } else if (!res.writableEnded) {
+      res.end();
+    }
   });
 
-  res.on('close', cleanup);
+  res.on('close', kill);
 }
 
 export function proxyViaFfmpeg(stream, res) {
@@ -47,15 +72,13 @@ export function proxyViaFfmpeg(stream, res) {
     'pipe:1',
   ]);
 
-  res.writeHead(200, {
-    'Content-Type': 'video/mp2t',
-    'Cache-Control': 'no-store, no-cache, must-revalidate',
-    'Access-Control-Allow-Origin': '*',
-  });
-
+  // Once ffmpeg exits, writes to its stdin raise EPIPE; an unhandled 'error'
+  // on the source stream or on stdin would crash the process. Swallow both.
+  ffmpeg.stdin.on('error', () => {});
+  stream.on('error', () => ffmpeg.kill('SIGKILL'));
   stream.pipe(ffmpeg.stdin);
-  ffmpeg.stdout.pipe(res);
-  attachCleanupHandlers(ffmpeg, res);
+
+  pipeFfmpegToResponse(ffmpeg, res, 'video/mp2t');
 }
 
 export function transcodeFromUrl(targetUrl, res) {
@@ -69,12 +92,5 @@ export function transcodeFromUrl(targetUrl, res) {
     'pipe:1',
   ]);
 
-  res.writeHead(200, {
-    'Content-Type': 'video/mp2t',
-    'Cache-Control': 'no-store, no-cache, must-revalidate',
-    'Access-Control-Allow-Origin': '*',
-  });
-
-  ffmpeg.stdout.pipe(res);
-  attachCleanupHandlers(ffmpeg, res);
+  pipeFfmpegToResponse(ffmpeg, res, 'video/mp2t');
 }

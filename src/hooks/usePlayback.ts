@@ -115,7 +115,10 @@ export function usePlayback({
       fetch(warmUrl, {
         method: 'GET',
         cache: 'no-store',
-        mode: useProxy ? 'same-origin' : 'no-cors',
+        // The proxy lives on a different origin in dev (:3005) and sends
+        // Access-Control-Allow-Origin, so it must be a CORS request — a
+        // 'same-origin' request would throw before ever hitting the network.
+        mode: useProxy ? 'cors' : 'no-cors',
         signal: ctl.signal,
       }).catch(() => {
         // best-effort warmup only

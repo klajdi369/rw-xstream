@@ -4,18 +4,13 @@ import { handleProxy, handleProxyTranscode } from './handlers/proxy.js';
 import { handleRemuxStart, serveRemuxAsset, handleRemuxDebug } from './handlers/remux.js';
 import { serveStatic } from './handlers/static.js';
 
-const PORT = Number(process.env.PORT || 3004);
+// Default off Vite's dev port (3004) so a bare `node server/index.js` never
+// collides with the dev server; the dev script sets PORT explicitly anyway.
+const PORT = Number(process.env.PORT || 8080);
 const HOST = '0.0.0.0';
 const API_ONLY = process.env.API_ONLY === '1';
 
-const server = http.createServer(async (req, res) => {
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    send(res, 405, 'text/plain; charset=utf-8', 'Method Not Allowed');
-    return;
-  }
-
-  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
-
+async function route(req, res, url) {
   if (url.pathname === '/proxy') {
     await handleProxy(req, res, url, PORT);
     return;
@@ -47,6 +42,38 @@ const server = http.createServer(async (req, res) => {
   }
 
   serveStatic(url.pathname, res);
+}
+
+const server = http.createServer(async (req, res) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    send(res, 405, 'text/plain; charset=utf-8', 'Method Not Allowed');
+    return;
+  }
+
+  let url;
+  try {
+    url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+  } catch {
+    send(res, 400, 'text/plain; charset=utf-8', 'Bad Request');
+    return;
+  }
+
+  try {
+    await route(req, res, url);
+  } catch (err) {
+    console.error(`[SERVER] unhandled error for ${req.method} ${url.pathname}:`, err);
+    // A handler threw after already streaming; send() no-ops if headers are out.
+    send(res, 500, 'text/plain; charset=utf-8', 'Internal Server Error');
+  }
+});
+
+// A rejected promise or a stray throw in a background callback must not take
+// the whole server down and kill every viewer.
+process.on('unhandledRejection', (reason) => {
+  console.error('[SERVER] unhandledRejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[SERVER] uncaughtException:', err);
 });
 
 server.listen(PORT, HOST, () => {
