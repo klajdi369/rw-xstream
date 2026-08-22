@@ -36,9 +36,9 @@ export default function App() {
   const [focus, setFocus] = React.useState<'categories' | 'channels'>('channels');
 
   // ── Connection credentials ───────────────────────────────────────────────────
-  const [server, setServer] = React.useState('http://line.tivi-ott.net');
-  const [user, setUser] = React.useState('UMYLEJ');
-  const [pass, setPass] = React.useState('VFCED1');
+  const [server, setServer] = React.useState('http://cgi26817.wd.business-cdn-8k.com');
+  const [user, setUser] = React.useState('2ac2f1121896');
+  const [pass, setPass] = React.useState('6b68a4da31');
   const [fmt, setFmt] = React.useState('m3u8');
   const [remember, setRemember] = React.useState(true);
   const [useProxy, setUseProxy] = React.useState(true);
