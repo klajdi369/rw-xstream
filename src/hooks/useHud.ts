@@ -12,12 +12,21 @@ export function useHud({ sidebarOpen, settingsOpen }: UseHudOptions) {
   const hudTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const wakeHud = React.useCallback(() => {
-    setHudHidden(false);
     if (hudTimerRef.current) clearTimeout(hudTimerRef.current);
-    if (!sidebarOpen && !settingsOpen) {
-      hudTimerRef.current = setTimeout(() => setHudHidden(true), 3500);
+    // While the sidebar/settings overlay is open it owns the screen; a visible
+    // HUD would only sit under the backdrop and swallow clicks. Keep it hidden.
+    if (sidebarOpen || settingsOpen) {
+      setHudHidden(true);
+      return;
     }
+    setHudHidden(false);
+    hudTimerRef.current = setTimeout(() => setHudHidden(true), 3500);
   }, [settingsOpen, sidebarOpen]);
+
+  // Hide the HUD the moment an overlay opens (it may have been awake).
+  React.useEffect(() => {
+    if (sidebarOpen || settingsOpen) setHudHidden(true);
+  }, [sidebarOpen, settingsOpen]);
 
   React.useEffect(() => {
     if (hudTimerRef.current) clearTimeout(hudTimerRef.current);

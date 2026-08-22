@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { send } from '../utils.js';
 
@@ -16,13 +17,16 @@ function ensureDir(dir) {
 }
 
 function remuxKeyFromUrl(url, mode = 'copy') {
-  return Buffer.from(`${mode}:${url}`).toString('base64url').slice(0, 40);
+  // Hash the full mode:url so two channels that differ only late in a long URL
+  // (common with single-account IPTV) can't collide onto the same job/output.
+  // A truncated base64 of the raw string would only compare the first ~30 bytes.
+  return crypto.createHash('sha256').update(`${mode}:${url}`).digest('hex').slice(0, 40);
 }
 
 function startRemuxJob(targetUrl, mode = 'copy') {
   const key = remuxKeyFromUrl(targetUrl, mode);
   if (remuxJobs.has(key)) {
-    return { key, playlistPath: path.join(REMUX_DIR, key, 'index.m3u8') };
+    return { key, playlistPath: path.join(REMUX_DIR, key, 'index.m3u8'), created: false };
   }
 
   const outDir = path.join(REMUX_DIR, key);
@@ -79,11 +83,32 @@ function startRemuxJob(targetUrl, mode = 'copy') {
   ff.on('close', (code) => {
     console.log(`[REMUX] stopped key=${key} code=${code}`);
     remuxJobs.delete(key);
+    // GC the job's segment/playlist directory so .remux doesn't grow forever.
+    fs.rm(outDir, { recursive: true, force: true }, () => {});
   });
 
   remuxJobs.set(key, ff);
-  return { key, playlistPath };
+  return { key, playlistPath, created: true };
 }
+
+function stopRemuxJob(key) {
+  const ff = remuxJobs.get(key);
+  if (ff) ff.kill('SIGKILL');
+}
+
+// Don't leave ffmpeg children orphaned (each dials forever via -reconnect)
+// when the server is stopped or restarted.
+let shuttingDown = false;
+function killAllJobs() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  for (const ff of remuxJobs.values()) {
+    try { ff.kill('SIGKILL'); } catch { /* already gone */ }
+  }
+}
+process.once('SIGTERM', () => { killAllJobs(); process.exit(0); });
+process.once('SIGINT', () => { killAllJobs(); process.exit(0); });
+process.once('exit', killAllJobs);
 
 async function waitForFile(filePath, timeoutMs = 10000) {
   const started = Date.now();
@@ -110,10 +135,13 @@ export async function handleRemuxStart(res, url) {
   }
 
   const mode = url.searchParams.get('mode') === 'transcode' ? 'transcode' : 'copy';
-  const { key, playlistPath } = startRemuxJob(targetUrl.toString(), mode);
+  const { key, playlistPath, created } = startRemuxJob(targetUrl.toString(), mode);
   const ready = await waitForFile(playlistPath, 12000);
 
   if (!ready) {
+    // Job never produced a playlist — don't leave a zombie ffmpeg reconnecting
+    // forever. Only kill a job we just started, not one shared with live viewers.
+    if (created) stopRemuxJob(key);
     return send(res, 504, 'application/json; charset=utf-8', JSON.stringify({ error: 'Remux startup timeout', key }));
   }
 

@@ -277,12 +277,17 @@ export default function App() {
     if (saved.useProxy !== undefined) setUseProxy(saved.useProxy !== false);
     if (saved.rememberProxyMode !== undefined) setRememberProxyMode(saved.rememberProxyMode !== false);
 
-    if (saved.server && saved.user && saved.pass) setTimeout(() => connect(), 30);
+    // Store the timer so StrictMode's double-invoked effect (dev) can cancel
+    // the first run's pending connect() and we don't fire duplicate auth/EPG
+    // fetches.
+    let connectTimer: ReturnType<typeof setTimeout> | undefined;
+    if (saved.server && saved.user && saved.pass) connectTimer = setTimeout(() => connect(), 30);
     else setSettingsOpen(true);
 
     initChannelOrder();
 
     return () => {
+      if (connectTimer) clearTimeout(connectTimer);
       stopPlayback();
       if (zapTimerRef.current) clearTimeout(zapTimerRef.current);
     };
@@ -337,6 +342,14 @@ export default function App() {
   // ── Keyboard handler ──────────────────────────────────────────────────────────
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Don't hijack keys destined for a focused text field (the sidebar search
+      // boxes) — arrows must move the caret and Escape must belong to the input,
+      // not navigate the channel list or close the sidebar.
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) {
+        return;
+      }
+
       showKeyIndicator(e.key);
       const isOrderButton = ['ColorF3Blue', 'Blue', 'NumLock'].includes(e.key);
 

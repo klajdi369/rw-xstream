@@ -58,8 +58,19 @@ export function VirtualList<T>({
     }
   }, [active, itemHeight, items.length, selectedIndex]);
 
-  const first = Math.max(0, Math.floor(scrollTop / itemHeight) - overscan);
-  const last = Math.min(items.length - 1, Math.ceil((scrollTop + height) / itemHeight) + overscan);
+  // When the list shrinks (e.g. a search query), the browser clamps the real
+  // scrollTop but our state copy can stay stale-large — which would make
+  // `first` exceed `last` and render an empty (blank) window. Clamp the value
+  // we window with against the current content height so that can't happen.
+  const maxScroll = Math.max(0, items.length * itemHeight - height);
+  const clampedScrollTop = Math.min(scrollTop, maxScroll);
+
+  React.useEffect(() => {
+    if (scrollTop > maxScroll) setScrollTop(maxScroll);
+  }, [maxScroll, scrollTop]);
+
+  const first = Math.max(0, Math.floor(clampedScrollTop / itemHeight) - overscan);
+  const last = Math.min(items.length - 1, Math.ceil((clampedScrollTop + height) / itemHeight) + overscan);
 
   return (
     <div className="vScroll" ref={ref} onScroll={(e) => setScrollTop((e.target as HTMLDivElement).scrollTop)}>
