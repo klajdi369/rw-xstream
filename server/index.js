@@ -1,7 +1,6 @@
 import http from 'node:http';
 import { send } from './utils.js';
 import { handleProxy, handleProxyTranscode } from './handlers/proxy.js';
-import { handleRemuxStart, serveRemuxAsset, handleRemuxDebug } from './handlers/remux.js';
 import { serveStatic } from './handlers/static.js';
 
 // Default off Vite's dev port (3004) so a bare `node server/index.js` never
@@ -18,21 +17,6 @@ async function route(req, res, url) {
 
   if (url.pathname === '/proxy-transcode') {
     await handleProxyTranscode(res, url);
-    return;
-  }
-
-  if (url.pathname === '/remux/start') {
-    await handleRemuxStart(res, url);
-    return;
-  }
-
-  if (url.pathname.startsWith('/remux/hls/')) {
-    serveRemuxAsset(url.pathname, res);
-    return;
-  }
-
-  if (url.pathname === '/remux/debug') {
-    handleRemuxDebug(res);
     return;
   }
 

@@ -30,19 +30,35 @@ export default function App() {
       : window.location.origin,
   );
 
+  // Read persisted settings once, synchronously, so the very first render already
+  // holds the saved values. Seeding state from these (instead of patching them in
+  // later via an effect) is what keeps startup auto-connect from running with —
+  // and then re-saving — the hardcoded defaults, which used to clobber the URL a
+  // user had saved.
+  const savedSettingsRef = React.useRef<Record<string, unknown> | null>(null);
+  if (savedSettingsRef.current === null) {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}');
+      savedSettingsRef.current = parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      savedSettingsRef.current = {};
+    }
+  }
+  const saved = savedSettingsRef.current ?? {};
+
   // ── Overlays ────────────────────────────────────────────────────────────────
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [focus, setFocus] = React.useState<'categories' | 'channels'>('channels');
 
   // ── Connection credentials ───────────────────────────────────────────────────
-  const [server, setServer] = React.useState('http://cgi26817.wd.business-cdn-8k.com');
-  const [user, setUser] = React.useState('2ac2f1121896');
-  const [pass, setPass] = React.useState('6b68a4da31');
-  const [fmt, setFmt] = React.useState('m3u8');
-  const [remember, setRemember] = React.useState(true);
-  const [useProxy, setUseProxy] = React.useState(true);
-  const [rememberProxyMode, setRememberProxyMode] = React.useState(true);
+  const [server, setServer] = React.useState(saved.server ? String(saved.server) : 'http://cgi26817.wd.business-cdn-8k.com');
+  const [user, setUser] = React.useState(saved.user ? String(saved.user) : '2ac2f1121896');
+  const [pass, setPass] = React.useState(saved.pass ? String(saved.pass) : '6b68a4da31');
+  const [fmt, setFmt] = React.useState(saved.fmt ? String(saved.fmt) : 'm3u8');
+  const [remember, setRemember] = React.useState(saved.rememberChannel !== false);
+  const [useProxy, setUseProxy] = React.useState(saved.useProxy !== false);
+  const [rememberProxyMode, setRememberProxyMode] = React.useState(saved.rememberProxyMode !== false);
 
   // ── Settings form state ──────────────────────────────────────────────────────
   const [msg, setMsg] = React.useState('');
@@ -168,11 +184,10 @@ export default function App() {
     wakeHud,
   });
 
-  // ── Derived channel lists ─────────────────────────────────────────────────────
-  const customOrderedChannels = React.useMemo(
-    () => sortWithCustomOrder(channels, activeCatRef.current || '', true),
-    [channels, sortWithCustomOrder],
-  );
+  // ── Derived channel list ──────────────────────────────────────────────────────
+  // A single ordered list drives both the on-screen sidebar and the off-screen
+  // (sidebar-closed) arrow/zap navigation, so `selCh` always indexes the same
+  // thing — the highlight can't drift onto a different channel between modes.
   const channelList = React.useMemo(
     () => sortWithCustomOrder(channels, activeCatRef.current || '', customOrderInList),
     [channels, customOrderInList, sortWithCustomOrder],
@@ -186,10 +201,21 @@ export default function App() {
 
     let list = cacheRef.current.get(id);
     if (!list) {
-      const data = await jget(apiUrl({ action: 'get_live_streams', category_id: id }));
-      list = Array.isArray(data) ? (data as Channel[]) : [];
-      list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
-      cacheRef.current.set(id, list);
+      try {
+        const data = await jget(apiUrl({ action: 'get_live_streams', category_id: id }));
+        list = Array.isArray(data) ? (data as Channel[]) : [];
+        list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+        cacheRef.current.set(id, list);
+      } catch (e) {
+        // Don't leave the failure as an unhandled rejection — tell the user the
+        // channel list couldn't load (the Server URL was unreachable even via
+        // the proxy fallback) instead of silently showing nothing.
+        setChannels([]);
+        setHudTitle(cat.category_name || 'Channels');
+        setHudSub(`Failed to load channels — ${(e as Error)?.message || 'connection error'}`);
+        wakeHud();
+        return;
+      }
     }
 
     const q = chQuery.trim().toLowerCase();
@@ -294,14 +320,10 @@ export default function App() {
 
   // ── Init from localStorage ────────────────────────────────────────────────────
   React.useEffect(() => {
-    const saved = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}') as Record<string, unknown>;
-    if (saved.server) setServer(String(saved.server));
-    if (saved.user) setUser(String(saved.user));
-    if (saved.pass) setPass(String(saved.pass));
-    if (saved.fmt) setFmt(String(saved.fmt));
-    if (saved.rememberChannel !== undefined) setRemember(saved.rememberChannel !== false);
-    if (saved.useProxy !== undefined) setUseProxy(saved.useProxy !== false);
-    if (saved.rememberProxyMode !== undefined) setRememberProxyMode(saved.rememberProxyMode !== false);
+    // Credentials were already seeded into state from `saved` above, so the
+    // first-render `connect` closure captured here holds the saved values (not
+    // the hardcoded defaults) — auto-connect and its localStorage write are
+    // therefore consistent with what the user saved.
 
     // Store the timer so StrictMode's double-invoked effect (dev) can cancel
     // the first run's pending connect() and we don't fire duplicate auth/EPG
@@ -373,23 +395,22 @@ export default function App() {
   // ── Number-zap: jump to channel by typed number ───────────────────────────────
   const executeZap = React.useCallback((digits: string) => {
     const num = parseInt(digits, 10);
-    if (isNaN(num) || num < 1 || !customOrderedChannels.length) return;
-    const idx = clamp(num - 1, 0, customOrderedChannels.length - 1);
+    if (isNaN(num) || num < 1 || !channelList.length) return;
+    const idx = clamp(num - 1, 0, channelList.length - 1);
     setSelCh(idx);
-    const ch = customOrderedChannels[idx];
+    const ch = channelList[idx];
     if (ch) {
       playNow(ch);
       showToast(ch.name || `Channel ${num}`);
     }
-  }, [customOrderedChannels, playNow, showToast]);
+  }, [channelList, playNow, showToast]);
 
   const moveByChannelRow = React.useCallback((dir: 1 | -1) => {
-    const navChannels = sidebarOpen && focus === 'channels' ? channelList : customOrderedChannels;
     const step = CHANNEL_ROW_JUMP * dir;
-    const n = clamp(selCh + step, 0, Math.max(0, navChannels.length - 1));
+    const n = clamp(selCh + step, 0, Math.max(0, channelList.length - 1));
     setSelCh(n);
-    tuneChannel(navChannels[n]);
-  }, [channelList, customOrderedChannels, focus, selCh, sidebarOpen, tuneChannel]);
+    tuneChannel(channelList[n]);
+  }, [channelList, selCh, tuneChannel]);
 
   // ── Keyboard handler ──────────────────────────────────────────────────────────
   React.useEffect(() => {
@@ -461,6 +482,11 @@ export default function App() {
           setOrderPromptError('');
           return;
         }
+        // The order dialog owns the keyboard while it's open — swallow every
+        // other key so arrows, Page/Channel keys, or Blue/Pause can't leak
+        // through and navigate or reorder the channel list underneath it.
+        e.preventDefault();
+        return;
       }
 
       // ── Settings open ──
@@ -521,8 +547,8 @@ export default function App() {
 
         const target = (sidebarOpen ? channelList[selCh] : null)
           || channels.find((c) => String(c.stream_id) === playingId)
-          || customOrderedChannels[selCh]
-          || customOrderedChannels[0];
+          || channelList[selCh]
+          || channelList[0];
 
         if (target) {
           const catId = activeCatRef.current || '';
@@ -554,8 +580,8 @@ export default function App() {
         }
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          if (playingId && customOrderedChannels.length) {
-            const playIdx = customOrderedChannels.findIndex((c) => String(c.stream_id) === playingId);
+          if (playingId && channelList.length) {
+            const playIdx = channelList.findIndex((c) => String(c.stream_id) === playingId);
             if (playIdx >= 0) setSelCh(playIdx);
           }
           setSidebarOpen(true);
@@ -564,16 +590,16 @@ export default function App() {
         }
         if (e.key === 'ArrowUp') {
           e.preventDefault();
-          const n = clamp(selCh - 1, 0, Math.max(0, customOrderedChannels.length - 1));
+          const n = clamp(selCh - 1, 0, Math.max(0, channelList.length - 1));
           setSelCh(n);
-          tuneChannel(customOrderedChannels[n]);
+          tuneChannel(channelList[n]);
           return;
         }
         if (e.key === 'ArrowDown') {
           e.preventDefault();
-          const n = clamp(selCh + 1, 0, Math.max(0, customOrderedChannels.length - 1));
+          const n = clamp(selCh + 1, 0, Math.max(0, channelList.length - 1));
           setSelCh(n);
-          tuneChannel(customOrderedChannels[n]);
+          tuneChannel(channelList[n]);
         }
         return;
       }
@@ -647,7 +673,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [
     categories, channelList, channelOrderMap, channels, connect, customOrderInList,
-    customOrderedChannels, executeZap, focus, loadCategory, moveByChannelRow,
+    executeZap, focus, loadCategory, moveByChannelRow,
     orderPromptDigits, orderPromptError, orderPromptOpen, orderPromptReplaceOnDigit,
     orderPromptTarget, playNow, playingId, selCat, selCh, settingsOpen,
     showAllCategories, showKeyIndicator, showToast, sidebarOpen, wakeHud,
