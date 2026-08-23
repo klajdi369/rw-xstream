@@ -78,6 +78,13 @@ export default function App() {
   const zapTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const orderKeySeqRef = React.useRef<{ count: number; until: number }>({ count: 0, until: 0 });
 
+  // ── Channel-surf tuning debounce ───────────────────────────────────────────────
+  // On a TV remote arrow presses repeat and come in bursts. Tuning on every
+  // keystroke fired a storm of playback attempts and made scrolling stutter.
+  // Debounce the actual tune so the highlight + toast update instantly while
+  // playback only starts once the user pauses on a channel.
+  const tuneTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // ── Composition cache ─────────────────────────────────────────────────────────
   const cacheRef = React.useRef<Map<string, Channel[]>>(new Map());
 
@@ -107,9 +114,28 @@ export default function App() {
   }, [server, user, pass]);
 
   const jget = React.useCallback(async (url: string): Promise<unknown> => {
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r.json();
+    // Fetch the Server URL (player_api.php) straight from the client first.
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return await r.json();
+    } catch (directErr) {
+      // A direct client fetch of the Server URL can fail for CORS, TLS/mixed
+      // content, DNS, or transient network reasons. When it does, route just
+      // this one API request through our own server's proxy and try again.
+      // This fallback is scoped to the Server URL only — streams and every
+      // other request keep their existing behaviour (nothing new is proxied).
+      try {
+        const proxied = `${backendBaseRef.current}/proxy?url=${encodeURIComponent(url)}&deint=0`;
+        const r = await fetch(proxied, { cache: 'no-store' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return await r.json();
+      } catch {
+        // Surface the original client-side failure — it's the more meaningful
+        // one to show the user when even the proxy fallback couldn't recover.
+        throw directErr;
+      }
+    }
   }, []);
 
   // ── EPG ───────────────────────────────────────────────────────────────────────
@@ -290,6 +316,7 @@ export default function App() {
       if (connectTimer) clearTimeout(connectTimer);
       stopPlayback();
       if (zapTimerRef.current) clearTimeout(zapTimerRef.current);
+      if (tuneTimerRef.current) clearTimeout(tuneTimerRef.current);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -315,6 +342,34 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chQuery]);
 
+  // ── Debounced tuning helpers ───────────────────────────────────────────────────
+  const cancelPendingTune = React.useCallback(() => {
+    if (tuneTimerRef.current) {
+      clearTimeout(tuneTimerRef.current);
+      tuneTimerRef.current = null;
+    }
+  }, []);
+
+  // Update the highlight/toast now, but defer the heavy playback start until the
+  // arrow presses settle — so surfing through channels stays smooth on a TV.
+  const tuneChannel = React.useCallback((ch: Channel | undefined) => {
+    if (!ch) return;
+    showToast(ch.name || 'Channel');
+    wakeHud();
+    cancelPendingTune();
+    tuneTimerRef.current = setTimeout(() => {
+      tuneTimerRef.current = null;
+      playChannel(ch);
+    }, 280);
+  }, [cancelPendingTune, playChannel, showToast, wakeHud]);
+
+  // Play right away and drop any queued debounce (explicit selections, zaps).
+  const playNow = React.useCallback((ch: Channel | undefined) => {
+    if (!ch) return;
+    cancelPendingTune();
+    playChannel(ch);
+  }, [cancelPendingTune, playChannel]);
+
   // ── Number-zap: jump to channel by typed number ───────────────────────────────
   const executeZap = React.useCallback((digits: string) => {
     const num = parseInt(digits, 10);
@@ -323,21 +378,18 @@ export default function App() {
     setSelCh(idx);
     const ch = customOrderedChannels[idx];
     if (ch) {
-      playChannel(ch);
+      playNow(ch);
       showToast(ch.name || `Channel ${num}`);
     }
-  }, [customOrderedChannels, playChannel, showToast]);
+  }, [customOrderedChannels, playNow, showToast]);
 
   const moveByChannelRow = React.useCallback((dir: 1 | -1) => {
     const navChannels = sidebarOpen && focus === 'channels' ? channelList : customOrderedChannels;
     const step = CHANNEL_ROW_JUMP * dir;
     const n = clamp(selCh + step, 0, Math.max(0, navChannels.length - 1));
     setSelCh(n);
-    if (navChannels[n]) {
-      playChannel(navChannels[n]);
-      showToast(navChannels[n].name || 'Channel');
-    }
-  }, [channelList, customOrderedChannels, focus, playChannel, selCh, showToast, sidebarOpen]);
+    tuneChannel(navChannels[n]);
+  }, [channelList, customOrderedChannels, focus, selCh, sidebarOpen, tuneChannel]);
 
   // ── Keyboard handler ──────────────────────────────────────────────────────────
   React.useEffect(() => {
@@ -351,7 +403,7 @@ export default function App() {
       }
 
       showKeyIndicator(e.key);
-      const isOrderButton = ['ColorF3Blue', 'Blue', 'NumLock'].includes(e.key);
+      const isOrderButton = ['ColorF3Blue', 'Blue', 'Pause'].includes(e.key);
 
       // ── Order prompt mode ──
       if (orderPromptOpen) {
@@ -514,20 +566,14 @@ export default function App() {
           e.preventDefault();
           const n = clamp(selCh - 1, 0, Math.max(0, customOrderedChannels.length - 1));
           setSelCh(n);
-          if (customOrderedChannels[n]) {
-            playChannel(customOrderedChannels[n]);
-            showToast(customOrderedChannels[n].name || 'Channel');
-          }
+          tuneChannel(customOrderedChannels[n]);
           return;
         }
         if (e.key === 'ArrowDown') {
           e.preventDefault();
           const n = clamp(selCh + 1, 0, Math.max(0, customOrderedChannels.length - 1));
           setSelCh(n);
-          if (customOrderedChannels[n]) {
-            playChannel(customOrderedChannels[n]);
-            showToast(customOrderedChannels[n].name || 'Channel');
-          }
+          tuneChannel(customOrderedChannels[n]);
         }
         return;
       }
@@ -591,7 +637,7 @@ export default function App() {
           if (cat) loadCategory(cat, true);
           setFocus('channels');
         } else if (channelList[selCh]) {
-          playChannel(channelList[selCh]);
+          playNow(channelList[selCh]);
           setSidebarOpen(false);
         }
       }
@@ -603,7 +649,7 @@ export default function App() {
     categories, channelList, channelOrderMap, channels, connect, customOrderInList,
     customOrderedChannels, executeZap, focus, loadCategory, moveByChannelRow,
     orderPromptDigits, orderPromptError, orderPromptOpen, orderPromptReplaceOnDigit,
-    orderPromptTarget, playChannel, playingId, selCat, selCh, settingsOpen,
+    orderPromptTarget, playNow, playingId, selCat, selCh, settingsOpen,
     showAllCategories, showKeyIndicator, showToast, sidebarOpen, wakeHud,
     writeChannelOrderMap, writeChannelOrderMode, setHudSub, zapDigits,
   ]);
@@ -653,7 +699,7 @@ export default function App() {
         onPickChannel={(i) => {
           setSelCh(i);
           if (channelList[i]) {
-            playChannel(channelList[i]);
+            playNow(channelList[i]);
             setSidebarOpen(false);
           }
         }}
