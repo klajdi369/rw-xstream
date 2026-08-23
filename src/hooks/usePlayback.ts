@@ -84,13 +84,19 @@ export function usePlayback({
   const preloadNearbyChannels = React.useCallback((list: Channel[], centerIndex: number) => {
     if (!list.length || !server || !user || !pass) return;
 
-    const now = Date.now();
-    const indices: number[] = [];
-    for (let i = centerIndex - 3; i <= centerIndex + 3; i += 1) {
-      if (i >= 0 && i < list.length && i !== centerIndex) indices.push(i);
-    }
-
     const sourceFormat: StreamFormat = fmt === 'ts' ? 'ts' : 'm3u8';
+
+    // Warming a `.ts` URL opens a *real* live stream connection, and most Xtream
+    // accounts cap concurrent connections (often to 1). Warming several neighbours
+    // that way was saturating the account and making the provider answer the
+    // actual tune with 403 — the very failures the retry logic then fought. Only
+    // prime the lightweight `.m3u8` manifest (a small request that doesn't hold a
+    // stream open), and only the immediate previous/next channel.
+    if (sourceFormat !== 'm3u8') return;
+
+    const now = Date.now();
+    const indices = [centerIndex - 1, centerIndex + 1]
+      .filter((i) => i >= 0 && i < list.length && i !== centerIndex);
 
     for (const idx of indices) {
       const ch = list[idx];
