@@ -220,7 +220,11 @@ export function usePlayback({
       const transcodeAbsolute = `${backendBaseRef.current}/proxy-transcode?url=${encodeURIComponent(directUrl)}`;
       const url = attempt.viaTranscode ? transcodeAbsolute : (attempt.viaProxy ? proxyAbsolute : directUrl);
 
-      const modeLabel = `${attempt.playAs.toUpperCase()}${attempt.viaProxy ? ' + Proxy' : ''}${attempt.viaTranscode ? ' + FFMPEG' : ''}`;
+      // Both the plain proxy and the FFMPEG transcode are fetched through our
+      // own server, so surface "Proxy" in either case — the FFMPEG path reads
+      // "Proxy + FFMPEG" to make clear it too came from the proxy, not direct.
+      const viaServer = attempt.viaProxy || attempt.viaTranscode;
+      const modeLabel = `${attempt.playAs.toUpperCase()}${viaServer ? ' + Proxy' : ''}${attempt.viaTranscode ? ' + FFMPEG' : ''}`;
       setHudSub(`Connecting… ${modeLabel}`);
       wakeHud();
       console.log('[Player] attempt', { index, modeLabel, url });
