@@ -107,9 +107,28 @@ export default function App() {
   }, [server, user, pass]);
 
   const jget = React.useCallback(async (url: string): Promise<unknown> => {
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r.json();
+    // Fetch the Server URL (player_api.php) straight from the client first.
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return await r.json();
+    } catch (directErr) {
+      // A direct client fetch of the Server URL can fail for CORS, TLS/mixed
+      // content, DNS, or transient network reasons. When it does, route just
+      // this one API request through our own server's proxy and try again.
+      // This fallback is scoped to the Server URL only — streams and every
+      // other request keep their existing behaviour (nothing new is proxied).
+      try {
+        const proxied = `${backendBaseRef.current}/proxy?url=${encodeURIComponent(url)}&deint=0`;
+        const r = await fetch(proxied, { cache: 'no-store' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return await r.json();
+      } catch {
+        // Surface the original client-side failure — it's the more meaningful
+        // one to show the user when even the proxy fallback couldn't recover.
+        throw directErr;
+      }
+    }
   }, []);
 
   // ── EPG ───────────────────────────────────────────────────────────────────────
@@ -351,7 +370,7 @@ export default function App() {
       }
 
       showKeyIndicator(e.key);
-      const isOrderButton = ['ColorF3Blue', 'Blue', 'NumLock'].includes(e.key);
+      const isOrderButton = ['ColorF3Blue', 'Blue', 'Pause'].includes(e.key);
 
       // ── Order prompt mode ──
       if (orderPromptOpen) {
