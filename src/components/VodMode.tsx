@@ -40,7 +40,7 @@ export function VodMode({ apiUrl, jget, server, user, pass, onExit }: VodModePro
     categories, streams, activeCatId, loading, error,
     allStreams, allLoading, loadCategories, loadStreams, loadAllStreams,
   } = useVod({ apiUrl, jget });
-  const { state, play, stop, togglePause, seekBy } = useVodPlayback({ videoRef: vodVideoRef, server, user, pass });
+  const { state, play, stop, togglePause, seekBy, selectAudio, selectText } = useVodPlayback({ videoRef: vodVideoRef, server, user, pass });
 
   const [browseOpen, setBrowseOpen] = React.useState(true);
   const [focus, setFocus] = React.useState<'categories' | 'movies'>('categories');
@@ -48,6 +48,22 @@ export function VodMode({ apiUrl, jget, server, user, pass, onExit }: VodModePro
   const [selMovie, setSelMovie] = React.useState(0);
   const [catQuery, setCatQuery] = React.useState('');
   const [movieQuery, setMovieQuery] = React.useState('');
+  const [tracksOpen, setTracksOpen] = React.useState(false);
+  const [selTrack, setSelTrack] = React.useState(0);
+
+  // Flat menu of switchable tracks: audio options, then "off" + subtitle options.
+  type TrackOption = { kind: 'audio' | 'text'; id: string | null; label: string };
+  const trackOptions = React.useMemo<TrackOption[]>(() => {
+    const opts: TrackOption[] = [];
+    state.audioTracks.forEach((t) => opts.push({ kind: 'audio', id: t.id, label: `Audio · ${t.label}` }));
+    opts.push({ kind: 'text', id: null, label: 'Subtitles · Off' });
+    state.textTracks.forEach((t) => opts.push({ kind: 'text', id: t.id, label: `Subtitles · ${t.label}` }));
+    return opts;
+  }, [state.audioTracks, state.textTracks]);
+  const noTracks = state.audioTracks.length === 0 && state.textTracks.length === 0;
+  const isTrackActive = (o: TrackOption) => (
+    o.kind === 'audio' ? o.id === state.activeAudioId : o.id === state.activeTextId
+  );
 
   const filteredCategories = React.useMemo(() => {
     const q = catQuery.trim().toLowerCase();
@@ -106,10 +122,31 @@ export function VodMode({ apiUrl, jget, server, user, pass, onExit }: VodModePro
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
 
+      const focusSearch = () => { setFocus('movies'); setBrowseOpen(true); movieSearchRef.current?.focus(); };
+
+      // Green colour button focuses search from anywhere (remote-friendly).
+      if (['ColorF1Green', 'Green'].includes(e.key)) { e.preventDefault(); focusSearch(); return; }
+
+      // ── Track menu (modal over playback) ──
+      if (tracksOpen) {
+        if (e.key === 'ArrowUp') { e.preventDefault(); setSelTrack((v) => clamp(v - 1, 0, Math.max(0, trackOptions.length - 1))); return; }
+        if (e.key === 'ArrowDown') { e.preventDefault(); setSelTrack((v) => clamp(v + 1, 0, Math.max(0, trackOptions.length - 1))); return; }
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          const o = trackOptions[selTrack];
+          if (o) { if (o.kind === 'audio' && o.id) selectAudio(o.id); else if (o.kind === 'text') selectText(o.id); }
+          return;
+        }
+        // Any other key (Back, the toggle again, etc.) closes the menu.
+        e.preventDefault();
+        setTracksOpen(false);
+        return;
+      }
+
       // ── Browse open ──
       if (browseOpen) {
         // '/' jumps straight to the movie search box (searches every category).
-        if (e.key === '/') { e.preventDefault(); setFocus('movies'); movieSearchRef.current?.focus(); return; }
+        if (e.key === '/') { e.preventDefault(); focusSearch(); return; }
         if (e.key === 'ArrowLeft' && focus === 'movies') { e.preventDefault(); setFocus('categories'); return; }
         if (e.key === 'ArrowRight' && focus === 'categories') { e.preventDefault(); setFocus('movies'); return; }
 
@@ -127,8 +164,14 @@ export function VodMode({ apiUrl, jget, server, user, pass, onExit }: VodModePro
         }
         if (e.key === 'ArrowUp') {
           e.preventDefault();
-          if (focus === 'categories') setSelCat((v) => clamp(v - 1, 0, Math.max(0, filteredCategories.length - 1)));
-          else setSelMovie((v) => clamp(v - 1, 0, Math.max(0, filteredMovies.length - 1)));
+          if (focus === 'categories') {
+            setSelCat((v) => clamp(v - 1, 0, Math.max(0, filteredCategories.length - 1)));
+          } else if (selMovie === 0) {
+            // Already at the top of the movie list — step up into the search box.
+            focusSearch();
+          } else {
+            setSelMovie((v) => clamp(v - 1, 0, Math.max(0, filteredMovies.length - 1)));
+          }
           return;
         }
         if (e.key === 'ArrowDown') {
@@ -163,6 +206,16 @@ export function VodMode({ apiUrl, jget, server, user, pass, onExit }: VodModePro
         togglePause();
         return;
       }
+      // Yellow colour button (or T / S) opens the audio & subtitle menu.
+      if (['ColorF2Yellow', 'Yellow'].includes(e.key) || e.key === 't' || e.key === 'T' || e.key === 's' || e.key === 'S') {
+        e.preventDefault();
+        if (state.activeId) {
+          const idx = trackOptions.findIndex((o) => isTrackActive(o));
+          setSelTrack(idx >= 0 ? idx : 0);
+          setTracksOpen(true);
+        }
+        return;
+      }
       if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
         e.preventDefault();
         setBrowseOpen(true);
@@ -178,7 +231,9 @@ export function VodMode({ apiUrl, jget, server, user, pass, onExit }: VodModePro
     return () => window.removeEventListener('keydown', onKey);
   }, [
     browseOpen, filteredCategories, filteredMovies, focus, onExit, openCategory,
-    playMovie, seekBy, selCat, selMovie, state.activeId, togglePause,
+    playMovie, seekBy, selCat, selMovie, state.activeId, state.activeAudioId,
+    state.activeTextId, togglePause, tracksOpen, trackOptions, selTrack,
+    selectAudio, selectText,
   ]);
 
   const activeCategoryName = categories.find((c) => String(c.category_id) === activeCatId)?.category_name || 'Movies';
@@ -202,9 +257,42 @@ export function VodMode({ apiUrl, jget, server, user, pass, onExit }: VodModePro
           <div className="vodTrack"><div className="vodFill" style={{ width: `${progressPct}%` }} /></div>
           <div className="vodBarBottom">
             <span className="vodTime">{fmtDuration(state.current)} / {fmtDuration(state.duration)}</span>
-            <span className="vodHint">← / → seek · OK play/pause · ↑ list · Back exit</span>
+            <span className="vodHint">← / → seek · OK play/pause · ↑ list · <kbd>Yellow</kbd>/T audio & subs · Back exit</span>
           </div>
           {state.error && <div className="vodError">{state.error}</div>}
+        </div>
+      )}
+
+      {/* Audio / subtitle track menu */}
+      {tracksOpen && (
+        <div id="vodTracks">
+          <div className="vodTracksCard">
+            <div className="vodTracksTitle">Audio &amp; Subtitles</div>
+            {noTracks ? (
+              <div className="vodTracksEmpty">
+                No selectable audio or subtitle tracks for this title.
+                <div className="vodTracksEmptySub">Multi-track switching depends on the file container and the browser — most MP4 titles carry a single embedded track.</div>
+              </div>
+            ) : (
+              <div className="vodTracksList">
+                {trackOptions.map((o, i) => (
+                  <div
+                    key={`${o.kind}-${o.id ?? 'off'}`}
+                    className={`vodTrackRow ${i === selTrack ? 'sel' : ''} ${isTrackActive(o) ? 'active' : ''}`}
+                    onClick={() => {
+                      setSelTrack(i);
+                      if (o.kind === 'audio' && o.id) selectAudio(o.id); else if (o.kind === 'text') selectText(o.id);
+                    }}
+                  >
+                    <span className="vodTrackDot" />
+                    <span className="vodTrackLabel">{o.label}</span>
+                    {isTrackActive(o) && <span className="vodTrackTag">On</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="vodTracksHint">↑ / ↓ choose · OK apply · Back close</div>
+          </div>
         </div>
       )}
 
@@ -212,7 +300,10 @@ export function VodMode({ apiUrl, jget, server, user, pass, onExit }: VodModePro
       <div id="vodBrowse" className={browseOpen ? 'open' : ''}>
         <div className="vodBrowseHeader">
           <span className="vodBrowseTitle">Movies</span>
-          <button className="vodClose" onClick={onExit}>✕ Live TV</button>
+          <div className="vodHeaderActions">
+            <button className="vodClose" onClick={() => { setFocus('movies'); movieSearchRef.current?.focus(); }}>🔍 Search</button>
+            <button className="vodClose" onClick={onExit}>✕ Live TV</button>
+          </div>
         </div>
         <div className="vodPanels">
           <div className={`panel vodCatPanel ${focus === 'categories' ? 'active' : ''}`}>
@@ -259,11 +350,11 @@ export function VodMode({ apiUrl, jget, server, user, pass, onExit }: VodModePro
                 onChange={(e) => setMovieQuery(e.target.value)}
               />
             </div>
-            {searching && (
-              <div className="vodSearchNote">
-                {allLoading ? 'Loading full catalog…' : `Searching all ${allStreams.length} movies across every category`}
-              </div>
-            )}
+            <div className="vodSearchNote">
+              {searching
+                ? (allLoading ? 'Loading full catalog…' : `Searching all ${allStreams.length} movies across every category`)
+                : 'Press Green, ↑ from the top, or the 🔍 button to search all movies'}
+            </div>
             <VirtualList
               items={filteredMovies}
               selectedIndex={selMovie}

@@ -16,6 +16,20 @@ interface UseVodPlaybackOptions {
   pass: string;
 }
 
+export interface TrackInfo {
+  id: string;
+  label: string;
+}
+
+// Minimal shape of the non-standard HTMLMediaElement.audioTracks (WebKit family).
+interface AudioTrackLike { id?: string; label?: string; language?: string; enabled: boolean; }
+interface AudioTrackListLike {
+  length: number;
+  [index: number]: AudioTrackLike;
+  addEventListener?: (type: string, listener: () => void) => void;
+  removeEventListener?: (type: string, listener: () => void) => void;
+}
+
 export interface VodPlaybackState {
   activeId: string | null;
   title: string;
@@ -24,6 +38,10 @@ export interface VodPlaybackState {
   paused: boolean;
   buffering: boolean;
   error: string;
+  audioTracks: TrackInfo[];
+  activeAudioId: string | null;
+  textTracks: TrackInfo[];
+  activeTextId: string | null; // null = subtitles off
 }
 
 const INITIAL: VodPlaybackState = {
@@ -34,6 +52,10 @@ const INITIAL: VodPlaybackState = {
   paused: false,
   buffering: false,
   error: '',
+  audioTracks: [],
+  activeAudioId: null,
+  textTracks: [],
+  activeTextId: null,
 };
 
 function readProgressMap(): Record<string, VodProgress> {
@@ -151,6 +173,66 @@ export function useVodPlayback({ videoRef, server, user, pass }: UseVodPlaybackO
     persistNow();
   }, [persistNow, videoRef]);
 
+  // ── Audio / subtitle tracks ─────────────────────────────────────────────────
+  // Whatever the browser exposes for the currently-loaded file. Availability is
+  // very browser- and container-dependent (audioTracks in particular is only in
+  // WebKit-family browsers, which is what most TVs run), so this is best-effort:
+  // if the lists come back empty the UI simply says none are selectable.
+  const enumerateTracks = React.useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+
+    const audioList: TrackInfo[] = [];
+    let activeAudioId: string | null = null;
+    // `audioTracks` isn't in the standard DOM typings — feature-detect it.
+    const at = (v as unknown as { audioTracks?: AudioTrackListLike }).audioTracks;
+    if (at && at.length) {
+      for (let i = 0; i < at.length; i += 1) {
+        const t = at[i];
+        const id = String(t.id || i);
+        audioList.push({ id, label: t.label || t.language || `Audio ${i + 1}` });
+        if (t.enabled) activeAudioId = id;
+      }
+      if (!activeAudioId && audioList[0]) activeAudioId = audioList[0].id;
+    }
+
+    const textList: TrackInfo[] = [];
+    let activeTextId: string | null = null;
+    const tt = v.textTracks;
+    if (tt && tt.length) {
+      for (let i = 0; i < tt.length; i += 1) {
+        const t = tt[i];
+        if (t.kind === 'metadata' || t.kind === 'chapters') continue;
+        const id = String(i); // index into textTracks — used to switch it back
+        textList.push({ id, label: t.label || t.language || `Subtitle ${i + 1}` });
+        if (t.mode === 'showing') activeTextId = id;
+      }
+    }
+
+    setState((s) => (s.activeId
+      ? { ...s, audioTracks: audioList, activeAudioId, textTracks: textList, activeTextId }
+      : s));
+  }, [videoRef]);
+
+  const selectAudio = React.useCallback((id: string) => {
+    const v = videoRef.current;
+    const at = v && (v as unknown as { audioTracks?: AudioTrackListLike }).audioTracks;
+    if (!at) return;
+    for (let i = 0; i < at.length; i += 1) at[i].enabled = String(at[i].id || i) === id;
+    setState((s) => ({ ...s, activeAudioId: id }));
+  }, [videoRef]);
+
+  const selectText = React.useCallback((id: string | null) => {
+    const v = videoRef.current;
+    const tt = v?.textTracks;
+    if (!tt) return;
+    for (let i = 0; i < tt.length; i += 1) {
+      if (tt[i].kind === 'metadata' || tt[i].kind === 'chapters') continue;
+      tt[i].mode = id !== null && String(i) === id ? 'showing' : 'disabled';
+    }
+    setState((s) => ({ ...s, activeTextId: id }));
+  }, [videoRef]);
+
   // Wire <video> events → state. Bound once against the stable element.
   React.useEffect(() => {
     const v = videoRef.current;
@@ -176,6 +258,11 @@ export function useVodPlayback({ videoRef, server, user, pass }: UseVodPlaybackO
         : s
     ));
 
+    // Track lists can arrive after metadata; re-scan on these and on list changes.
+    const onTracks = () => enumerateTracks();
+    const at = (v as unknown as { audioTracks?: AudioTrackListLike }).audioTracks;
+    const tt = v.textTracks as unknown as (TextTrackList & { addEventListener?: (t: string, l: () => void) => void; removeEventListener?: (t: string, l: () => void) => void }) | undefined;
+
     v.addEventListener('timeupdate', sync);
     v.addEventListener('durationchange', sync);
     v.addEventListener('waiting', onWaiting);
@@ -183,6 +270,14 @@ export function useVodPlayback({ videoRef, server, user, pass }: UseVodPlaybackO
     v.addEventListener('pause', onPause);
     v.addEventListener('ended', onEnded);
     v.addEventListener('error', onError);
+    v.addEventListener('loadedmetadata', onTracks);
+    v.addEventListener('canplay', onTracks);
+    at?.addEventListener?.('addtrack', onTracks);
+    at?.addEventListener?.('removetrack', onTracks);
+    at?.addEventListener?.('change', onTracks);
+    tt?.addEventListener?.('addtrack', onTracks);
+    tt?.addEventListener?.('removetrack', onTracks);
+    tt?.addEventListener?.('change', onTracks);
 
     return () => {
       v.removeEventListener('timeupdate', sync);
@@ -192,10 +287,18 @@ export function useVodPlayback({ videoRef, server, user, pass }: UseVodPlaybackO
       v.removeEventListener('pause', onPause);
       v.removeEventListener('ended', onEnded);
       v.removeEventListener('error', onError);
+      v.removeEventListener('loadedmetadata', onTracks);
+      v.removeEventListener('canplay', onTracks);
+      at?.removeEventListener?.('addtrack', onTracks);
+      at?.removeEventListener?.('removetrack', onTracks);
+      at?.removeEventListener?.('change', onTracks);
+      tt?.removeEventListener?.('addtrack', onTracks);
+      tt?.removeEventListener?.('removetrack', onTracks);
+      tt?.removeEventListener?.('change', onTracks);
     };
-  }, [persistNow, videoRef]);
+  }, [enumerateTracks, persistNow, videoRef]);
 
   React.useEffect(() => () => { stopSaveTimer(); }, [stopSaveTimer]);
 
-  return { state, play, stop, togglePause, seekBy };
+  return { state, play, stop, togglePause, seekBy, selectAudio, selectText };
 }
