@@ -52,7 +52,7 @@ export default function App() {
   const [focus, setFocus] = React.useState<'categories' | 'channels'>('channels');
 
   // ── Connection credentials ───────────────────────────────────────────────────
-  const [server, setServer] = React.useState(saved.server ? String(saved.server) : 'http://cgi26817.wd.business-cdn-8k.com');
+  const [server, setServer] = React.useState(saved.server ? String(saved.server) : 'http://pro.boost8k.top');
   const [user, setUser] = React.useState(saved.user ? String(saved.user) : '2ac2f1121896');
   const [pass, setPass] = React.useState(saved.pass ? String(saved.pass) : '6b68a4da31');
   const [fmt, setFmt] = React.useState(saved.fmt ? String(saved.fmt) : 'm3u8');
