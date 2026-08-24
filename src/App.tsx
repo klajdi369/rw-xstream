@@ -3,6 +3,7 @@ import { Hud } from './components/Hud';
 import { OrderPrompt } from './components/OrderPrompt';
 import { SettingsOverlay } from './components/SettingsOverlay';
 import { Sidebar } from './components/Sidebar';
+import { VodMode } from './components/VodMode';
 import { useChannelOrder } from './hooks/useChannelOrder';
 import { useEpg } from './hooks/useEpg';
 import { useHud } from './hooks/useHud';
@@ -50,6 +51,10 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [focus, setFocus] = React.useState<'categories' | 'channels'>('channels');
+
+  // 'live' (default) runs the existing IPTV experience untouched; 'vod' hands
+  // the screen and keyboard to the self-contained <VodMode> overlay.
+  const [contentMode, setContentMode] = React.useState<'live' | 'vod'>('live');
 
   // ── Connection credentials ───────────────────────────────────────────────────
   const [server, setServer] = React.useState(saved.server ? String(saved.server) : 'http://cgi26817.wd.business-cdn-8k.com');
@@ -392,6 +397,24 @@ export default function App() {
     playChannel(ch);
   }, [cancelPendingTune, playChannel]);
 
+  // ── VOD mode entry/exit ────────────────────────────────────────────────────────
+  const enterVod = React.useCallback(() => {
+    // Release the live player so the two <video> elements never fight over the
+    // network or audio, then hand off to the VOD overlay.
+    cancelPendingTune();
+    stopPlayback();
+    setSidebarOpen(false);
+    setSettingsOpen(false);
+    setContentMode('vod');
+  }, [cancelPendingTune, stopPlayback]);
+
+  const exitVod = React.useCallback(() => {
+    setContentMode('live');
+    setHudTitle('Live TV');
+    setHudSub('Press OK to open channel list');
+    wakeHud();
+  }, [setHudSub, setHudTitle, wakeHud]);
+
   // ── Number-zap: jump to channel by typed number ───────────────────────────────
   const executeZap = React.useCallback((digits: string) => {
     const num = parseInt(digits, 10);
@@ -423,7 +446,19 @@ export default function App() {
         return;
       }
 
+      // In VOD mode the <VodMode> overlay owns the keyboard — the live handler
+      // stays completely out of the way.
+      if (contentMode !== 'live') return;
+
       showKeyIndicator(e.key);
+
+      // Enter the movies overlay (Red colour button, or 'v' on a keyboard).
+      if ((['ColorF0Red', 'Red'].includes(e.key) || e.key === 'v' || e.key === 'V') && !settingsOpen && !orderPromptOpen) {
+        e.preventDefault();
+        enterVod();
+        return;
+      }
+
       const isOrderButton = ['ColorF3Blue', 'Blue', 'Pause'].includes(e.key);
 
       // ── Order prompt mode ──
@@ -672,8 +707,8 @@ export default function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [
-    categories, channelList, channelOrderMap, channels, connect, customOrderInList,
-    executeZap, focus, loadCategory, moveByChannelRow,
+    categories, channelList, channelOrderMap, channels, connect, contentMode,
+    customOrderInList, enterVod, executeZap, focus, loadCategory, moveByChannelRow,
     orderPromptDigits, orderPromptError, orderPromptOpen, orderPromptReplaceOnDigit,
     orderPromptTarget, playNow, playingId, selCat, selCh, settingsOpen,
     showAllCategories, showKeyIndicator, showToast, sidebarOpen, wakeHud,
@@ -741,8 +776,9 @@ export default function App() {
       <Hud
         title={hudTitle}
         subtitle={hudSub}
-        hidden={hudHidden || settingsOpen}
+        hidden={hudHidden || settingsOpen || contentMode === 'vod'}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenVod={enterVod}
         keyIndicator={keyIndicator}
         epg={epg}
       />
@@ -783,6 +819,17 @@ export default function App() {
         <div className="cMsg">{connectMsg}</div>
         <div className="progBar"><div className="progFill" style={{ width: `${connectProgress}%` }} /></div>
       </div>
+
+      {contentMode === 'vod' && (
+        <VodMode
+          apiUrl={apiUrl}
+          jget={jget}
+          server={server}
+          user={user}
+          pass={pass}
+          onExit={exitVod}
+        />
+      )}
     </>
   );
 }
