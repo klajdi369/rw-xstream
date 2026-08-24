@@ -34,8 +34,12 @@ function fmtDuration(secs: number): string {
  */
 export function VodMode({ apiUrl, jget, server, user, pass, onExit }: VodModeProps) {
   const vodVideoRef = React.useRef<HTMLVideoElement>(null);
+  const movieSearchRef = React.useRef<HTMLInputElement>(null);
 
-  const { categories, streams, activeCatId, loading, error, loadCategories, loadStreams } = useVod({ apiUrl, jget });
+  const {
+    categories, streams, activeCatId, loading, error,
+    allStreams, allLoading, loadCategories, loadStreams, loadAllStreams,
+  } = useVod({ apiUrl, jget });
   const { state, play, stop, togglePause, seekBy } = useVodPlayback({ videoRef: vodVideoRef, server, user, pass });
 
   const [browseOpen, setBrowseOpen] = React.useState(true);
@@ -50,10 +54,21 @@ export function VodMode({ apiUrl, jget, server, user, pass, onExit }: VodModePro
     return q ? categories.filter((c) => String(c.category_name || '').toLowerCase().includes(q)) : categories;
   }, [categories, catQuery]);
 
+  // A non-empty query searches the whole catalog (all categories); an empty box
+  // shows just the selected category's movies.
+  const searching = movieQuery.trim().length > 0;
   const filteredMovies = React.useMemo(() => {
     const q = movieQuery.trim().toLowerCase();
-    return q ? streams.filter((m) => String(m.name || '').toLowerCase().includes(q)) : streams;
-  }, [streams, movieQuery]);
+    if (!q) return streams;
+    return allStreams.filter((m) => String(m.name || '').toLowerCase().includes(q));
+  }, [streams, allStreams, movieQuery]);
+
+  // Pull the full catalog the first time the user searches, and keep the
+  // selection valid as the visible list swaps between category and search.
+  React.useEffect(() => {
+    if (searching) void loadAllStreams();
+    setSelMovie(0);
+  }, [searching, movieQuery, loadAllStreams]);
 
   // ── Initial load ──────────────────────────────────────────────────────────────
   React.useEffect(() => {
@@ -93,6 +108,8 @@ export function VodMode({ apiUrl, jget, server, user, pass, onExit }: VodModePro
 
       // ── Browse open ──
       if (browseOpen) {
+        // '/' jumps straight to the movie search box (searches every category).
+        if (e.key === '/') { e.preventDefault(); setFocus('movies'); movieSearchRef.current?.focus(); return; }
         if (e.key === 'ArrowLeft' && focus === 'movies') { e.preventDefault(); setFocus('categories'); return; }
         if (e.key === 'ArrowRight' && focus === 'categories') { e.preventDefault(); setFocus('movies'); return; }
 
@@ -198,7 +215,7 @@ export function VodMode({ apiUrl, jget, server, user, pass, onExit }: VodModePro
           <button className="vodClose" onClick={onExit}>✕ Live TV</button>
         </div>
         <div className="vodPanels">
-          <div className={`panel ${focus === 'categories' ? 'active' : ''}`} id="catPanel">
+          <div className={`panel vodCatPanel ${focus === 'categories' ? 'active' : ''}`}>
             <div className="panelHead">
               <span className="ttl">Categories</span>
               <span className="badge">{filteredCategories.length}</span>
@@ -220,14 +237,33 @@ export function VodMode({ apiUrl, jget, server, user, pass, onExit }: VodModePro
             />
           </div>
 
-          <div className={`panel ${focus === 'movies' ? 'active' : ''}`} id="chPanel">
+          <div className={`panel vodChPanel ${focus === 'movies' ? 'active' : ''}`}>
             <div className="panelHead">
-              <span className="ttl">{activeCategoryName}</span>
-              <span className="badge">{loading ? '…' : filteredMovies.length}</span>
+              <span className="ttl">{searching ? 'Search results' : activeCategoryName}</span>
+              <span className="badge">{(searching ? allLoading : loading) ? '…' : filteredMovies.length}</span>
             </div>
             <div className="searchWrap">
-              <input className="sInput" placeholder="Search movies…" value={movieQuery} onChange={(e) => setMovieQuery(e.target.value)} />
+              <input
+                ref={movieSearchRef}
+                className="sInput"
+                placeholder="Search all movies…  ( / )"
+                value={movieQuery}
+                onKeyDown={(e) => {
+                  // Hand control back to list navigation without the global
+                  // handler (which ignores keys typed into inputs) seeing it.
+                  if (e.key === 'Enter' || e.key === 'Escape' || e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    e.currentTarget.blur();
+                  }
+                }}
+                onChange={(e) => setMovieQuery(e.target.value)}
+              />
             </div>
+            {searching && (
+              <div className="vodSearchNote">
+                {allLoading ? 'Loading full catalog…' : `Searching all ${allStreams.length} movies across every category`}
+              </div>
+            )}
             <VirtualList
               items={filteredMovies}
               selectedIndex={selMovie}

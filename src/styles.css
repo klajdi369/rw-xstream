@@ -617,7 +617,14 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
 .vodClose:hover, .vodClose:focus {
   background: rgba(58, 160, 255, .18); border-color: var(--foc); outline: none;
 }
+.vodSearchNote {
+  padding: 8px 14px 10px; font-size: 13px; color: var(--muted);
+  border-bottom: 1px solid var(--line); flex-shrink: 0;
+}
 .vodPanels { flex: 1; display: flex; min-height: 0; }
+.vodCatPanel { width: 280px; flex-shrink: 0; }
+.vodChPanel { flex: 1; min-width: 0; }
+.vodChPanel.active .panelHead { border-left-color: var(--acc); background: rgba(29, 209, 161, .03); }
 .vodBrowseError {
   padding: 12px 20px; color: #ff8f8f; font-size: 14px; font-weight: 600;
   border-top: 1px solid var(--line); flex-shrink: 0;

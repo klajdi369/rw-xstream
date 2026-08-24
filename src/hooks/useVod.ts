@@ -19,8 +19,14 @@ export function useVod({ apiUrl, jget }: UseVodOptions) {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState('');
 
+  // The full catalog (every category) — loaded lazily the first time the user
+  // searches, so search can span all categories rather than the open one.
+  const [allStreams, setAllStreams] = React.useState<VodStream[]>([]);
+  const [allLoading, setAllLoading] = React.useState(false);
+
   const streamCacheRef = React.useRef<Map<string, VodStream[]>>(new Map());
   const loadedCategoriesRef = React.useRef(false);
+  const allLoadRef = React.useRef<Promise<VodStream[]> | null>(null);
 
   const loadCategories = React.useCallback(async (force = false): Promise<Category[]> => {
     if (loadedCategoriesRef.current && !force) return categories;
@@ -64,13 +70,41 @@ export function useVod({ apiUrl, jget }: UseVodOptions) {
     }
   }, [apiUrl, jget]);
 
+  // Load (once) every VOD stream across all categories. Xtream returns the whole
+  // catalog when `get_vod_streams` is called with no category_id.
+  const loadAllStreams = React.useCallback((): Promise<VodStream[]> => {
+    if (allStreams.length) return Promise.resolve(allStreams);
+    if (allLoadRef.current) return allLoadRef.current;
+
+    setAllLoading(true);
+    allLoadRef.current = (async () => {
+      try {
+        const data = await jget(apiUrl({ action: 'get_vod_streams' }));
+        const list = (Array.isArray(data) ? data : []) as VodStream[];
+        list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+        setAllStreams(list);
+        return list;
+      } catch (e) {
+        setError(`Failed to load movie catalog — ${(e as Error)?.message || 'connection error'}`);
+        return [];
+      } finally {
+        setAllLoading(false);
+        allLoadRef.current = null;
+      }
+    })();
+    return allLoadRef.current;
+  }, [allStreams, apiUrl, jget]);
+
   return {
     categories,
     streams,
     activeCatId,
     loading,
     error,
+    allStreams,
+    allLoading,
     loadCategories,
     loadStreams,
+    loadAllStreams,
   };
 }
