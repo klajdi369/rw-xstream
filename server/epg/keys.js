@@ -24,7 +24,7 @@ const NOISE_TOKENS = new Set([
   'fullhd', '1080p', '1080i', '720p', '720i', 'uhd', 'fhd', 'hevc', 'h265', 'h264',
   '4k', '8k', 'hd', 'sd',
   'al', 'alb', 'albania', 'albanian', 'sq', 'shqip',
-  'backup', 'bk', 'alt',
+  'backup', 'bk', 'alt', 'vip', 'raw',
   // Guides and provider lists disagree constantly about this one: "TV Klan"
   // against "klan.al", "Report TV" against "reporttv".
   'tv',
@@ -38,6 +38,24 @@ const GLUED_QUALITY = ['fullhd', '1080p', '1080i', '720p', 'hevc', 'h265', 'h264
 // channel into another (e.g. refuses to shorten "ahd" to "a").
 const MIN_STEM_LENGTH = 4;
 
+// Provider lists tag channels with the group they belong to: "AL-VIP: CUFO",
+// "AL| Top Channel", "|AL| Klan". The tag is never part of the channel's name.
+// A tag has no spaces in it, which is what keeps a real name like
+// "Sky Sports: Premier League" from being mistaken for one.
+const GROUP_TAG_RE = /^\s*[^\s:|]{0,12}\s*[:|]\s*/;
+const MAX_GROUP_TAGS = 3;
+
+function stripGroupTags(value) {
+  let name = value;
+  for (let i = 0; i < MAX_GROUP_TAGS; i += 1) {
+    const stripped = name.replace(GROUP_TAG_RE, '');
+    // Only accept the strip if it leaves an actual name behind.
+    if (stripped === name || !stripped.trim()) break;
+    name = stripped;
+  }
+  return name;
+}
+
 /**
  * Fold a channel identifier down past quality and region decorations, so
  * "AL| Top Channel HD" and "Top Channel" land on the same key. Returns '' when
@@ -46,7 +64,7 @@ const MIN_STEM_LENGTH = 4;
  * @returns {string}
  */
 export function looseKey(value) {
-  const tokens = String(value ?? '')
+  const tokens = stripGroupTags(String(value ?? ''))
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter(Boolean);
@@ -68,10 +86,15 @@ export function looseKey(value) {
     }
   }
 
-  // Same idea for a "tv" welded to the front, as in "TVKlan.al" — the token
-  // pass above can only see it when a separator sets it apart.
+  // Same idea for a "tv" welded to either end, as in "TVKlan.al" or
+  // "juniortv.al" — the token pass above can only see it when a separator sets
+  // it apart, and stripping one side only would make "JUNIOR TV" and
+  // "juniortv" disagree.
   if (key.startsWith('tv') && key.length - 2 >= MIN_STEM_LENGTH) {
     key = key.slice(2);
+  }
+  if (key.endsWith('tv') && key.length - 2 >= MIN_STEM_LENGTH) {
+    key = key.slice(0, -2);
   }
 
   // A one-character key matches far too eagerly to be worth trusting.
