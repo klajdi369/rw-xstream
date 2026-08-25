@@ -104,6 +104,10 @@ export default function App() {
   // ── Composition cache ─────────────────────────────────────────────────────────
   const cacheRef = React.useRef<Map<string, Channel[]>>(new Map());
 
+  // Sidebar search inputs — so ↑ at the top of a list can step up into search.
+  const catSearchRef = React.useRef<HTMLInputElement>(null);
+  const chSearchRef = React.useRef<HTMLInputElement>(null);
+
   // ── Custom hooks ──────────────────────────────────────────────────────────────
   const { hudTitle, setHudTitle, hudSub, setHudSub, hudHidden, wakeHud } = useHud({ sidebarOpen, settingsOpen });
   const { channelToast, showToast } = useToast();
@@ -612,6 +616,13 @@ export default function App() {
         return;
       }
 
+      // '/' jumps straight to the focused panel's search box.
+      if (e.key === '/') {
+        e.preventDefault();
+        (focus === 'categories' ? catSearchRef : chSearchRef).current?.focus();
+        return;
+      }
+
       if (!HIDE_CATEGORIES && e.key === 'ArrowLeft' && focus === 'channels') {
         e.preventDefault();
         setFocus('categories');
@@ -643,7 +654,11 @@ export default function App() {
       if (e.key === 'ArrowUp') {
         e.preventDefault();
         if (focus === 'categories') {
-          setSelCat((v) => clamp(v - 1, 0, Math.max(0, categories.length - 1)));
+          // At the top of the list, step up into the search box.
+          if (selCat === 0) catSearchRef.current?.focus();
+          else setSelCat((v) => clamp(v - 1, 0, Math.max(0, categories.length - 1)));
+        } else if (selCh === 0) {
+          chSearchRef.current?.focus();
         } else {
           setSelCh((v) => clamp(v - 1, 0, Math.max(0, channelList.length - 1)));
         }
@@ -672,8 +687,8 @@ export default function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [
-    categories, channelList, channelOrderMap, channels, connect, customOrderInList,
-    executeZap, focus, loadCategory, moveByChannelRow,
+    categories, channelList, channelOrderMap, channels, connect,
+    customOrderInList, executeZap, focus, loadCategory, moveByChannelRow,
     orderPromptDigits, orderPromptError, orderPromptOpen, orderPromptReplaceOnDigit,
     orderPromptTarget, playNow, playingId, selCat, selCh, settingsOpen,
     showAllCategories, showKeyIndicator, showToast, sidebarOpen, wakeHud,
@@ -713,6 +728,8 @@ export default function App() {
         playingId={playingId}
         activeCategoryName={activeCatName}
         channelOrderModeLabel={customOrderInList ? 'Custom' : 'Default'}
+        categorySearchRef={catSearchRef}
+        channelSearchRef={chSearchRef}
         onCategoryQuery={(value) => { if (!HIDE_CATEGORIES || showAllCategories) setCatQuery(value); }}
         onChannelQuery={setChQuery}
         onPickCategory={async (i) => {

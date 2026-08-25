@@ -15,16 +15,28 @@ type Props = {
   playingId: string | null;
   activeCategoryName: string;
   channelOrderModeLabel: string;
+  categorySearchRef?: React.RefObject<HTMLInputElement>;
+  channelSearchRef?: React.RefObject<HTMLInputElement>;
   onCategoryQuery: (value: string) => void;
   onChannelQuery: (value: string) => void;
   onPickCategory: (index: number) => void;
   onPickChannel: (index: number) => void;
 };
 
+// Leave the search field back to list navigation without the global keyboard
+// handler (which ignores keys typed into inputs) ever seeing the keystroke.
+const blurOnExitKeys = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  if (e.key === 'Enter' || e.key === 'Escape' || e.key === 'ArrowDown') {
+    e.preventDefault();
+    e.currentTarget.blur();
+  }
+};
+
 export function Sidebar(props: Props) {
   const {
     open, focus, categories, channels, selectedCategory, selectedChannel, showCategories = true,
     categoryQuery, channelQuery, playingId, activeCategoryName, channelOrderModeLabel,
+    categorySearchRef, channelSearchRef,
     onCategoryQuery, onChannelQuery, onPickCategory, onPickChannel,
   } = props;
 
@@ -38,9 +50,11 @@ export function Sidebar(props: Props) {
           </div>
           <div className="searchWrap">
             <input
+              ref={categorySearchRef}
               className="sInput"
               placeholder="Search categories…"
               value={categoryQuery}
+              onKeyDown={blurOnExitKeys}
               onChange={(e) => onCategoryQuery(e.target.value)}
             />
           </div>
@@ -70,9 +84,11 @@ export function Sidebar(props: Props) {
         </div>
         <div className="searchWrap">
           <input
+            ref={channelSearchRef}
             className="sInput"
             placeholder="Search channels…"
             value={channelQuery}
+            onKeyDown={blurOnExitKeys}
             onChange={(e) => onChannelQuery(e.target.value)}
           />
         </div>
