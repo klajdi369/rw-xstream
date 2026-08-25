@@ -35,11 +35,13 @@ export function Hud({ title, subtitle, hidden, onOpenSettings, keyIndicator, epg
       </div>
       <div id="keyIndicator" className={keyIndicator ? 'show' : ''}>{keyIndicator || ''}</div>
       <div className="hudHint">
-        <kbd>OK</kbd> open list<br />
+        <kbd>OK</kbd> channel list<br />
         <kbd>&#x2191;</kbd> <kbd>&#x2193;</kbd> prev / next<br />
-        <kbd>&#x2190;</kbd> categories<br />
-        <kbd>Back</kbd> close<br />
+        <kbd>CH+</kbd> <kbd>CH&#x2212;</kbd> jump 8<br />
+        <kbd>0</kbd>&ndash;<kbd>9</kbd> go to number<br />
+        <kbd>Blue</kbd> / <kbd>Pause</kbd> set order<br />
         <kbd>Red</kbd> / <kbd>Menu</kbd> settings<br />
+        <span className="hintDim">In list: <kbd>/</kbd> or <kbd>&#x2191;</kbd> search &middot; <kbd>&#x2190;</kbd><kbd>&#x2192;</kbd> panels</span>
         <button id="settingsBtn" onClick={onOpenSettings}>Settings</button>
       </div>
     </div>
