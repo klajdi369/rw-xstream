@@ -508,6 +508,16 @@ export default function App() {
       // live handler just stays out of the way.
       if (settingsOpen) return;
 
+      // ── Open Settings (works while watching or in the list) ──
+      // The HUD's Settings button needs a pointer; a TV remote has none, so map
+      // it to the Red colour button and the various "menu" keys remotes emit.
+      if (['ColorF0Red', 'Red', 'ContextMenu', 'Menu', 'Tools', 'Settings', 'Info'].includes(e.key)) {
+        e.preventDefault();
+        setSidebarOpen(false);
+        setSettingsOpen(true);
+        return;
+      }
+
       // ── Number zap (sidebar closed) ──
       if (!sidebarOpen && e.key >= '0' && e.key <= '9') {
         e.preventDefault();

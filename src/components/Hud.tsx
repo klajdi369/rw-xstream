@@ -39,6 +39,7 @@ export function Hud({ title, subtitle, hidden, onOpenSettings, keyIndicator, epg
         <kbd>&#x2191;</kbd> <kbd>&#x2193;</kbd> prev / next<br />
         <kbd>&#x2190;</kbd> categories<br />
         <kbd>Back</kbd> close<br />
+        <kbd>Red</kbd> / <kbd>Menu</kbd> settings<br />
         <button id="settingsBtn" onClick={onOpenSettings}>Settings</button>
       </div>
     </div>
