@@ -494,11 +494,9 @@ export default function App() {
       }
 
       // ── Settings open ──
-      if (settingsOpen) {
-        if (e.key === 'Escape' || e.key === 'Backspace') setSettingsOpen(false);
-        if (e.key === 'Enter') connect();
-        return;
-      }
+      // The SettingsOverlay owns its own keyboard navigation while open; the
+      // live handler just stays out of the way.
+      if (settingsOpen) return;
 
       // ── Number zap (sidebar closed) ──
       if (!sidebarOpen && e.key >= '0' && e.key <= '9') {
@@ -786,6 +784,7 @@ export default function App() {
           if (patch.rememberProxyMode !== undefined) setRememberProxyMode(patch.rememberProxyMode);
         }}
         onConnect={connect}
+        onClose={() => setSettingsOpen(false)}
         onClear={() => {
           localStorage.removeItem(SAVE_KEY);
           localStorage.removeItem(LAST_KEY);
