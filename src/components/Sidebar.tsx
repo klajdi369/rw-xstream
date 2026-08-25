@@ -17,28 +17,36 @@ type Props = {
   channelOrderModeLabel: string;
   categorySearchRef?: React.RefObject<HTMLInputElement>;
   channelSearchRef?: React.RefObject<HTMLInputElement>;
+  onSearchNav?: (dir: 'up' | 'down' | 'left' | 'right') => void;
   onCategoryQuery: (value: string) => void;
   onChannelQuery: (value: string) => void;
   onPickCategory: (index: number) => void;
   onPickChannel: (index: number) => void;
 };
 
-// Leave the search field back to list navigation without the global keyboard
-// handler (which ignores keys typed into inputs) ever seeing the keystroke.
-const blurOnExitKeys = (e: React.KeyboardEvent<HTMLInputElement>) => {
-  if (e.key === 'Enter' || e.key === 'Escape' || e.key === 'ArrowDown') {
-    e.preventDefault();
-    e.currentTarget.blur();
-  }
-};
-
 export function Sidebar(props: Props) {
   const {
     open, focus, categories, channels, selectedCategory, selectedChannel, showCategories = true,
     categoryQuery, channelQuery, playingId, activeCategoryName, channelOrderModeLabel,
-    categorySearchRef, channelSearchRef,
+    categorySearchRef, channelSearchRef, onSearchNav,
     onCategoryQuery, onChannelQuery, onPickCategory, onPickChannel,
   } = props;
+
+  // Leave the search field back to list/panel navigation. Arrow keys blur the
+  // field and hand the intended direction to the parent — so from search you
+  // can drop into the list (↓) or jump between the category/channel panels
+  // (←/→) in a single press, instead of getting stuck typing.
+  const searchFieldKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' || e.key === 'Escape') {
+      e.preventDefault();
+      e.currentTarget.blur();
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      e.currentTarget.blur();
+      const dir = e.key === 'ArrowDown' ? 'down' : e.key === 'ArrowUp' ? 'up' : e.key === 'ArrowLeft' ? 'left' : 'right';
+      onSearchNav?.(dir);
+    }
+  };
 
   return (
     <div id="sidebar" className={open ? 'open' : ''}>
@@ -54,7 +62,7 @@ export function Sidebar(props: Props) {
               className="sInput"
               placeholder="Search categories…"
               value={categoryQuery}
-              onKeyDown={blurOnExitKeys}
+              onKeyDown={searchFieldKey}
               onChange={(e) => onCategoryQuery(e.target.value)}
             />
           </div>
@@ -88,7 +96,7 @@ export function Sidebar(props: Props) {
             className="sInput"
             placeholder="Search channels…"
             value={channelQuery}
-            onKeyDown={blurOnExitKeys}
+            onKeyDown={searchFieldKey}
             onChange={(e) => onChannelQuery(e.target.value)}
           />
         </div>

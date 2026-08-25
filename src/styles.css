@@ -127,6 +127,12 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   color: rgba(232, 240, 250, .85);
   vertical-align: middle;
 }
+.hudHint .hintDim {
+  display: block; margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, .08);
+  font-size: 13px; color: rgba(232, 240, 250, .48);
+}
+.hudHint .hintDim kbd { font-size: 12px; padding: 0 6px; }
 
 #settingsBtn {
   display: block; margin-top: 12px; padding: 9px 16px;
