@@ -396,6 +396,16 @@ export default function App() {
     playChannel(ch);
   }, [cancelPendingTune, playChannel]);
 
+  // Arrow keys pressed while a sidebar search field is focused. The field blurs
+  // itself first; here we just apply the resulting navigation so you can leave
+  // the search box — and switch panels — without getting stuck typing.
+  const onSidebarSearchNav = React.useCallback((dir: 'up' | 'down' | 'left' | 'right') => {
+    const categoriesVisible = !HIDE_CATEGORIES || showAllCategories;
+    if (dir === 'left' && categoriesVisible) setFocus('categories');
+    else if (dir === 'right' && categoriesVisible) setFocus('channels');
+    // up / down simply return control to the list; its highlight is already set.
+  }, [showAllCategories]);
+
   // ── Number-zap: jump to channel by typed number ───────────────────────────────
   const executeZap = React.useCallback((digits: string) => {
     const num = parseInt(digits, 10);
@@ -607,9 +617,13 @@ export default function App() {
       }
 
       // ── Sidebar open navigation ──
+      // Categories can be switched to whenever they're actually on screen —
+      // either always-shown, or unlocked via the category-unlock sequence.
+      const categoriesVisible = !HIDE_CATEGORIES || showAllCategories;
+
       if (e.key === 'Escape' || e.key === 'Backspace') {
         e.preventDefault();
-        if (!HIDE_CATEGORIES && focus === 'categories') setFocus('channels');
+        if (categoriesVisible && focus === 'categories') setFocus('channels');
         else setSidebarOpen(false);
         return;
       }
@@ -621,12 +635,12 @@ export default function App() {
         return;
       }
 
-      if (!HIDE_CATEGORIES && e.key === 'ArrowLeft' && focus === 'channels') {
+      if (categoriesVisible && e.key === 'ArrowLeft' && focus === 'channels') {
         e.preventDefault();
         setFocus('categories');
         return;
       }
-      if (!HIDE_CATEGORIES && e.key === 'ArrowRight' && focus === 'categories') {
+      if (categoriesVisible && e.key === 'ArrowRight' && focus === 'categories') {
         e.preventDefault();
         setFocus('channels');
         return;
@@ -728,6 +742,7 @@ export default function App() {
         channelOrderModeLabel={customOrderInList ? 'Custom' : 'Default'}
         categorySearchRef={catSearchRef}
         channelSearchRef={chSearchRef}
+        onSearchNav={onSidebarSearchNav}
         onCategoryQuery={(value) => { if (!HIDE_CATEGORIES || showAllCategories) setCatQuery(value); }}
         onChannelQuery={setChQuery}
         onPickCategory={async (i) => {
