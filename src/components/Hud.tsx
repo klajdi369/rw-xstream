@@ -5,7 +5,6 @@ type Props = {
   subtitle: string;
   hidden: boolean;
   onOpenSettings: () => void;
-  onOpenVod?: () => void;
   keyIndicator?: string;
   epg?: {
     nowTitle: string;
@@ -16,7 +15,7 @@ type Props = {
   } | null;
 };
 
-export function Hud({ title, subtitle, hidden, onOpenSettings, onOpenVod, keyIndicator, epg }: Props) {
+export function Hud({ title, subtitle, hidden, onOpenSettings, keyIndicator, epg }: Props) {
   return (
     <div id="hud" className={hidden ? 'hide' : ''}>
       <div className="hudInfo">
@@ -40,8 +39,6 @@ export function Hud({ title, subtitle, hidden, onOpenSettings, onOpenVod, keyInd
         <kbd>&#x2191;</kbd> <kbd>&#x2193;</kbd> prev / next<br />
         <kbd>&#x2190;</kbd> categories<br />
         <kbd>Back</kbd> close<br />
-        <kbd>Red</kbd> / <kbd>V</kbd> movies<br />
-        {onOpenVod && <button id="vodBtn" onClick={onOpenVod}>Movies</button>}
         <button id="settingsBtn" onClick={onOpenSettings}>Settings</button>
       </div>
     </div>

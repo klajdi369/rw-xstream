@@ -128,7 +128,7 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   vertical-align: middle;
 }
 
-#settingsBtn, #vodBtn {
+#settingsBtn {
   display: block; margin-top: 12px; padding: 9px 16px;
   background: rgba(255, 255, 255, .06);
   border: 1px solid rgba(255, 255, 255, .12);
@@ -136,8 +136,8 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   cursor: pointer; text-align: center;
   transition: background .15s, border-color .15s, box-shadow .15s;
 }
-#settingsBtn:hover, #settingsBtn:focus,
-#vodBtn:hover, #vodBtn:focus {
+#settingsBtn:hover,
+#settingsBtn:focus {
   background: rgba(58, 160, 255, .18);
   border-color: var(--foc);
   box-shadow: 0 0 0 3px rgba(58, 160, 255, .12);
@@ -547,128 +547,3 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   font-size: 15px;
   font-weight: 700;
 }
-
-/* ─── VOD (movies) mode ─── */
-#vodRoot { position: fixed; inset: 0; z-index: 50; }
-#vodVideoLayer { position: fixed; inset: 0; z-index: 1; background: #000; }
-#vodVideo { width: 100%; height: 100%; display: block; object-fit: contain; }
-
-#vodBuffer {
-  position: fixed; inset: 0; z-index: 3;
-  display: flex; align-items: center; justify-content: center;
-  pointer-events: none; opacity: 0; transition: opacity .3s ease;
-}
-#vodBuffer.show { opacity: 1; }
-
-/* Transport bar */
-#vodBar {
-  position: fixed; left: 48px; right: 48px; bottom: 48px; z-index: 6;
-  background: rgba(0, 0, 0, .82);
-  border: 1px solid rgba(255, 255, 255, .10);
-  backdrop-filter: blur(20px) saturate(1.4);
-  -webkit-backdrop-filter: blur(20px) saturate(1.4);
-  border-radius: 20px; padding: 18px 26px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, .5);
-}
-.vodBarTop, .vodBarBottom {
-  display: flex; align-items: center; justify-content: space-between; gap: 16px;
-}
-.vodTitle {
-  font-size: 22px; font-weight: 900; letter-spacing: -0.3px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.vodState { font-size: 15px; font-weight: 700; color: var(--acc); flex-shrink: 0; }
-.vodTrack {
-  height: 8px; border-radius: 999px; margin: 12px 0;
-  background: rgba(255, 255, 255, .12); overflow: hidden;
-}
-.vodFill {
-  height: 100%; border-radius: 999px;
-  background: linear-gradient(90deg, var(--acc), var(--foc));
-  transition: width .2s ease;
-}
-.vodTime { font-size: 15px; color: var(--text); font-variant-numeric: tabular-nums; }
-.vodHint { font-size: 13px; color: var(--muted); }
-.vodError { margin-top: 10px; color: #ff8f8f; font-size: 14px; font-weight: 700; }
-
-/* Browse overlay */
-#vodBrowse {
-  position: fixed; top: 0; left: 0; bottom: 0;
-  width: 760px; max-width: 88vw; z-index: 10;
-  display: flex; flex-direction: column;
-  background: var(--panel); border-right: 1px solid var(--line);
-  transform: translateX(-100%);
-  transition: transform .28s cubic-bezier(.4, 0, .2, 1);
-  box-shadow: 12px 0 40px rgba(0, 0, 0, .5);
-}
-#vodBrowse.open { transform: translateX(0); }
-.vodBrowseHeader {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 16px 20px; border-bottom: 1px solid var(--line); flex-shrink: 0;
-  background: rgba(0, 0, 0, .35);
-}
-.vodBrowseTitle { font-size: 22px; font-weight: 900; letter-spacing: -0.2px; }
-.vodClose {
-  padding: 8px 14px; border-radius: 10px; cursor: pointer;
-  background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .12);
-  color: var(--text); font-size: 14px; font-weight: 600;
-  transition: background .15s, border-color .15s;
-}
-.vodClose:hover, .vodClose:focus {
-  background: rgba(58, 160, 255, .18); border-color: var(--foc); outline: none;
-}
-.vodSearchNote {
-  padding: 8px 14px 10px; font-size: 13px; color: var(--muted);
-  border-bottom: 1px solid var(--line); flex-shrink: 0;
-}
-.vodPanels { flex: 1; display: flex; min-height: 0; }
-.vodCatPanel { width: 280px; flex-shrink: 0; }
-.vodChPanel { flex: 1; min-width: 0; }
-.vodChPanel.active .panelHead { border-left-color: var(--acc); background: rgba(29, 209, 161, .03); }
-.vodBrowseError {
-  padding: 12px 20px; color: #ff8f8f; font-size: 14px; font-weight: 600;
-  border-top: 1px solid var(--line); flex-shrink: 0;
-}
-.vodHeaderActions { display: flex; align-items: center; gap: 8px; }
-.vodHint kbd {
-  display: inline-block; background: rgba(255, 255, 255, .10);
-  border: 1px solid rgba(255, 255, 255, .16); border-radius: 5px;
-  padding: 0 6px; font-family: inherit; font-size: 12px; font-weight: 700;
-  color: rgba(232, 240, 250, .9); vertical-align: middle;
-}
-
-/* Audio / subtitle track menu */
-#vodTracks {
-  position: fixed; inset: 0; z-index: 20;
-  display: flex; align-items: center; justify-content: center;
-  background: rgba(0, 0, 0, .55); backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-}
-.vodTracksCard {
-  width: min(460px, 92vw); max-height: 80vh; overflow-y: auto;
-  border-radius: 18px; padding: 22px;
-  border: 1px solid rgba(255, 255, 255, .12);
-  background: linear-gradient(180deg, rgba(20, 26, 36, .98), rgba(12, 16, 24, .98));
-  box-shadow: 0 24px 80px rgba(0, 0, 0, .6);
-}
-.vodTracksTitle { font-size: 20px; font-weight: 900; margin-bottom: 14px; }
-.vodTracksEmpty { color: var(--text); font-size: 15px; line-height: 1.5; }
-.vodTracksEmptySub { margin-top: 8px; color: var(--muted); font-size: 13px; }
-.vodTracksList { display: flex; flex-direction: column; gap: 6px; }
-.vodTrackRow {
-  display: flex; align-items: center; gap: 12px;
-  padding: 12px 14px; border-radius: 10px; cursor: pointer;
-  border: 2px solid transparent; background: rgba(255, 255, 255, .03);
-  transition: background .12s, border-color .12s;
-}
-.vodTrackRow:hover { background: rgba(255, 255, 255, .06); }
-.vodTrackRow.sel { border-color: var(--foc); background: rgba(58, 160, 255, .12); }
-.vodTrackRow.active .vodTrackDot { background: var(--acc); box-shadow: 0 0 10px rgba(29, 209, 161, .7); }
-.vodTrackDot { width: 9px; height: 9px; border-radius: 50%; background: #2c3b4e; flex-shrink: 0; }
-.vodTrackLabel { flex: 1; font-size: 15px; font-weight: 600; }
-.vodTrackTag {
-  font-size: 11px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase;
-  color: var(--acc); background: rgba(29, 209, 161, .12);
-  border: 1px solid rgba(29, 209, 161, .2); border-radius: 4px; padding: 2px 7px;
-}
-.vodTracksHint { margin-top: 14px; color: var(--muted); font-size: 13px; text-align: center; }

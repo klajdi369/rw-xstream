@@ -14,20 +14,3 @@ export type LastChannel = {
   name: string;
   catId: string | number | null;
 };
-
-// ── VOD (movies) ───────────────────────────────────────────────────────────────
-export type VodStream = {
-  stream_id: string | number;
-  name: string;
-  stream_icon?: string;
-  container_extension?: string;
-  rating?: string | number;
-  added?: string;
-};
-
-// Per-movie resume position, keyed by stream_id in localStorage.
-export type VodProgress = {
-  position: number;
-  duration: number;
-  updatedAt: number;
-};
