@@ -1,4 +1,5 @@
 import React from 'react';
+import { clamp } from '../utils';
 
 type Props = {
   open: boolean;
@@ -15,52 +16,126 @@ type Props = {
   onChange: (patch: Record<string, any>) => void;
   onConnect: () => void;
   onClear: () => void;
+  onClose: () => void;
 };
 
+// The panel is one linear list of focusable rows so it can be driven entirely
+// by a remote: ↑/↓ move the highlight, OK edits a field / flips a toggle /
+// presses a button, Back closes.
+const ITEM_COUNT = 9; // server, fmt, user, pass, + 3 toggles, + Connect, Clear
+
 export function SettingsOverlay(props: Props) {
-  const { open, server, user, pass, fmt, remember, useProxy, rememberProxyMode, message, isError, progress, onChange, onConnect, onClear } = props;
+  const {
+    open, server, user, pass, fmt, remember, useProxy, rememberProxyMode,
+    message, isError, progress, onChange, onConnect, onClear, onClose,
+  } = props;
+
+  const [sel, setSel] = React.useState(0);
+  const cardRef = React.useRef<HTMLDivElement>(null);
+  const inputRefs = React.useRef<(HTMLInputElement | null)[]>([]);
+
+  React.useEffect(() => { if (open) setSel(0); }, [open]);
+
+  // Keep the highlighted row in view as it moves.
+  React.useEffect(() => {
+    if (!open) return;
+    cardRef.current?.querySelector(`[data-sel="${sel}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [sel, open]);
+
+  const activate = React.useCallback((i: number) => {
+    switch (i) {
+      case 0: case 1: case 2: case 3:
+        inputRefs.current[i]?.focus();
+        break;
+      case 4: onChange({ remember: !remember }); break;
+      case 5: onChange({ useProxy: !useProxy }); break;
+      case 6: onChange({ rememberProxyMode: !rememberProxyMode }); break;
+      case 7: onConnect(); break;
+      case 8: onClear(); break;
+    }
+  }, [onChange, onConnect, onClear, remember, useProxy, rememberProxyMode]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      // While a field is focused for typing, its own onKeyDown handles exit keys.
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+
+      if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); onClose(); return; }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); setSel((v) => clamp(v + 1, 0, ITEM_COUNT - 1)); return; }
+      if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); setSel((v) => clamp(v - 1, 0, ITEM_COUNT - 1)); return; }
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(sel); return; }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, sel, activate, onClose]);
+
+  // Inside a text field: leave back to row navigation without the field
+  // swallowing the keystroke.
+  const fieldKey = (e: React.KeyboardEvent<HTMLInputElement>, i: number) => {
+    if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); e.currentTarget.blur(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); e.currentTarget.blur(); setSel(clamp(i + 1, 0, ITEM_COUNT - 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); e.currentTarget.blur(); setSel(clamp(i - 1, 0, ITEM_COUNT - 1)); }
+  };
+
+  const selClass = (i: number) => (sel === i ? 'setSel' : '');
+  const setRef = (i: number) => (el: HTMLInputElement | null) => { inputRefs.current[i] = el; };
 
   return (
     <div id="settingsOverlay" className={open ? 'show' : ''}>
-      <div id="settingsCard">
+      <div id="settingsCard" ref={cardRef}>
         <h2>Settings</h2>
-        <p className="sub">Connection settings and preferences. Press Back / Esc to close.</p>
+        <p className="sub">↑ / ↓ move · OK to edit or toggle · Back to close.</p>
         <div className="row2">
-          <div className="field"><label>Server URL</label><input value={server} onChange={(e) => onChange({ server: e.target.value })} placeholder="http://server:8080" /></div>
-          <div className="field"><label>Format</label><input value={fmt} onChange={(e) => onChange({ fmt: e.target.value })} placeholder="m3u8 or ts" /></div>
+          <div className={`field ${selClass(0)}`} data-sel={0}>
+            <label>Server URL</label>
+            <input ref={setRef(0)} value={server} onKeyDown={(e) => fieldKey(e, 0)} onChange={(e) => onChange({ server: e.target.value })} placeholder="http://server:8080" />
+          </div>
+          <div className={`field ${selClass(1)}`} data-sel={1}>
+            <label>Format</label>
+            <input ref={setRef(1)} value={fmt} onKeyDown={(e) => fieldKey(e, 1)} onChange={(e) => onChange({ fmt: e.target.value })} placeholder="m3u8 or ts" />
+          </div>
         </div>
         <div className="row2">
-          <div className="field"><label>Username</label><input value={user} onChange={(e) => onChange({ user: e.target.value })} placeholder="username" /></div>
-          <div className="field"><label>Password</label><input type="password" value={pass} onChange={(e) => onChange({ pass: e.target.value })} placeholder="password" /></div>
+          <div className={`field ${selClass(2)}`} data-sel={2}>
+            <label>Username</label>
+            <input ref={setRef(2)} value={user} onKeyDown={(e) => fieldKey(e, 2)} onChange={(e) => onChange({ user: e.target.value })} placeholder="username" />
+          </div>
+          <div className={`field ${selClass(3)}`} data-sel={3}>
+            <label>Password</label>
+            <input ref={setRef(3)} type="password" value={pass} onKeyDown={(e) => fieldKey(e, 3)} onChange={(e) => onChange({ pass: e.target.value })} placeholder="password" />
+          </div>
         </div>
-        <div className="toggleRow">
+
+        <div className={`toggleRow ${selClass(4)}`} data-sel={4} onClick={() => { setSel(4); onChange({ remember: !remember }); }}>
           <div>
             <div className="tLabel">Remember last channel</div>
             <div className="tDesc">Resume the last watched channel on startup</div>
           </div>
-          <label className="toggle">
+          <label className="toggle" onClick={(e) => e.stopPropagation()}>
             <input type="checkbox" checked={remember} onChange={(e) => onChange({ remember: e.target.checked })} />
             <span className="toggleSlider" />
           </label>
         </div>
 
-        <div className="toggleRow">
+        <div className={`toggleRow ${selClass(5)}`} data-sel={5} onClick={() => { setSel(5); onChange({ useProxy: !useProxy }); }}>
           <div>
             <div className="tLabel">Use local proxy + deinterlace</div>
             <div className="tDesc">Route through /proxy and ffmpeg for interlaced channels</div>
           </div>
-          <label className="toggle">
+          <label className="toggle" onClick={(e) => e.stopPropagation()}>
             <input type="checkbox" checked={useProxy} onChange={(e) => onChange({ useProxy: e.target.checked })} />
             <span className="toggleSlider" />
           </label>
         </div>
 
-        <div className="toggleRow">
+        <div className={`toggleRow ${selClass(6)}`} data-sel={6} onClick={() => { setSel(6); onChange({ rememberProxyMode: !rememberProxyMode }); }}>
           <div>
             <div className="tLabel">Remember proxy mode per channel</div>
             <div className="tDesc">Reset after 6 successful loads or on complete playback failure</div>
           </div>
-          <label className="toggle">
+          <label className="toggle" onClick={(e) => e.stopPropagation()}>
             <input type="checkbox" checked={rememberProxyMode} onChange={(e) => onChange({ rememberProxyMode: e.target.checked })} />
             <span className="toggleSlider" />
           </label>
@@ -70,8 +145,8 @@ export function SettingsOverlay(props: Props) {
         )}
         <div className="settActions">
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button className="btn btnP" onClick={onConnect}>Connect</button>
-            <button className="btn btnD" onClick={onClear}>Clear Saved</button>
+            <button className={`btn btnP ${selClass(7)}`} data-sel={7} onClick={onConnect}>Connect</button>
+            <button className={`btn btnD ${selClass(8)}`} data-sel={8} onClick={onClear}>Clear Saved</button>
           </div>
           {message && <div className={`msg ${isError ? 'err' : 'ok'}`}>{message}</div>}
         </div>
