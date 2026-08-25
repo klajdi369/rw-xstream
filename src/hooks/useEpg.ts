@@ -15,74 +15,92 @@ interface UseEpgOptions {
   backendBaseUrl: string;
 }
 
+interface Programme {
+  title: string;
+  start: number;
+  end: number;
+}
+
+interface EpgResponse {
+  matched?: boolean;
+  programmes?: { title?: unknown; start?: unknown; stop?: unknown }[];
+}
+
 const EXTERNAL_EPG_URL = 'https://www.open-epg.com/files/albania1.xml';
+// Guides move slowly; the server holds its own cache, this one just keeps
+// rapid zapping between the same few channels off the network.
 const EXTERNAL_EPG_TTL_MS = 10 * 60 * 1000;
+// A set-top box stays up for weeks; don't accumulate an entry per channel ever
+// visited. Comfortably more than anyone zaps between in one TTL.
+const EXTERNAL_EPG_MAX_CACHED = 64;
+
+/** Identifies a cached lookup; both identifiers take part, neither is trusted to be unique alone. */
+function cacheKeyFor(epgChannelId?: string | null, channelName?: string) {
+  return JSON.stringify([String(epgChannelId ?? '').trim(), String(channelName ?? '').trim()]);
+}
 
 export function useEpg({ apiUrl, jget, backendBaseUrl }: UseEpgOptions) {
   const [epg, setEpg] = React.useState<EpgEntry | null>(null);
   const epgIntervalRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
   const epgRequestRef = React.useRef(0);
-  const externalEpgRef = React.useRef<{ fetchedAt: number; byChannel: Map<string, { title: string; start: number; end: number }[]> }>({
-    fetchedAt: 0,
-    byChannel: new Map(),
-  });
-  const externalEpgLoadRef = React.useRef<Promise<Map<string, { title: string; start: number; end: number }[]> | null> | null>(null);
+  const externalCacheRef = React.useRef(new Map<string, { fetchedAt: number; programmes: Programme[] }>());
+  const externalInFlightRef = React.useRef(new Map<string, Promise<Programme[]>>());
 
-  const normalizeChannelKey = React.useCallback((value: unknown): string => {
-    return String(value || '')
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, '');
-  }, []);
+  /**
+   * Ask the backend for this channel's programmes. The XMLTV feed is fetched,
+   * parsed and matched server-side, so the browser only ever sees the handful
+   * of entries around now.
+   */
+  const loadExternalEntries = React.useCallback(async (epgChannelId?: string | null, channelName?: string): Promise<Programme[]> => {
+    const channel = String(epgChannelId ?? '').trim();
+    const name = String(channelName ?? '').trim();
+    if (!channel && !name) return [];
 
-  const loadExternalEpg = React.useCallback(async () => {
-    const cache = externalEpgRef.current;
-    if (cache.byChannel.size > 0 && (Date.now() - cache.fetchedAt) < EXTERNAL_EPG_TTL_MS) {
-      return cache.byChannel;
-    }
-    if (externalEpgLoadRef.current) return externalEpgLoadRef.current;
+    const cacheKey = cacheKeyFor(channel, name);
+    const cached = externalCacheRef.current.get(cacheKey);
+    if (cached && (Date.now() - cached.fetchedAt) < EXTERNAL_EPG_TTL_MS) return cached.programmes;
 
-    externalEpgLoadRef.current = (async () => {
+    const inFlight = externalInFlightRef.current.get(cacheKey);
+    if (inFlight) return inFlight;
+
+    const request = (async (): Promise<Programme[]> => {
       try {
-        const proxiedUrl = `${backendBaseUrl}/proxy?url=${encodeURIComponent(EXTERNAL_EPG_URL)}&deint=0`;
-        const res = await fetch(proxiedUrl, { cache: 'no-store' });
-        if (!res.ok) throw new Error(`EPG XML HTTP ${res.status}`);
-        const xml = await res.text();
-        const doc = new DOMParser().parseFromString(xml, 'application/xml');
-        if (doc.querySelector('parsererror')) throw new Error('Invalid XMLTV payload');
+        const query = new URLSearchParams({ url: EXTERNAL_EPG_URL, channel, name });
+        const res = await fetch(`${backendBaseUrl}/epg?${query}`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`EPG HTTP ${res.status}`);
 
-        const byChannel = new Map<string, { title: string; start: number; end: number }[]>();
-        const programmes = Array.from(doc.querySelectorAll('programme'));
-        for (const p of programmes) {
-          const channel = p.getAttribute('channel') || '';
-          const key = normalizeChannelKey(channel);
-          if (!key) continue;
+        const data = await res.json() as EpgResponse;
+        const programmes = (data.programmes || [])
+          .map((entry) => ({
+            title: String(entry.title ?? ''),
+            start: parseEpgTs(entry.start),
+            end: parseEpgTs(entry.stop),
+          }))
+          .filter((entry) => entry.title && entry.start > 0 && entry.end > entry.start)
+          .sort((a, b) => a.start - b.start);
 
-          const start = parseEpgTs(p.getAttribute('start'));
-          const end = parseEpgTs(p.getAttribute('stop'));
-          if (!(start > 0 && end > start)) continue;
-
-          const title = decodePossiblyBase64Utf8(p.querySelector('title')?.textContent || '');
-          const list = byChannel.get(key) || [];
-          list.push({ title, start, end });
-          byChannel.set(key, list);
+        const cache = externalCacheRef.current;
+        cache.delete(cacheKey);
+        cache.set(cacheKey, { fetchedAt: Date.now(), programmes });
+        // Map preserves insertion order, so the first key is the oldest write.
+        while (cache.size > EXTERNAL_EPG_MAX_CACHED) {
+          const oldest = cache.keys().next();
+          if (oldest.done) break;
+          cache.delete(oldest.value);
         }
-
-        byChannel.forEach((list, key) => {
-          list.sort((a, b) => a.start - b.start);
-          byChannel.set(key, list);
-        });
-
-        externalEpgRef.current = { fetchedAt: Date.now(), byChannel };
-        return byChannel;
+        return programmes;
       } catch {
-        return externalEpgRef.current.byChannel.size ? externalEpgRef.current.byChannel : null;
+        // Leave the cache alone so a previous good answer survives a blip; the
+        // caller falls back to the provider's own guide.
+        return cached?.programmes ?? [];
       } finally {
-        externalEpgLoadRef.current = null;
+        externalInFlightRef.current.delete(cacheKey);
       }
     })();
 
-    return externalEpgLoadRef.current;
-  }, [backendBaseUrl, normalizeChannelKey]);
+    externalInFlightRef.current.set(cacheKey, request);
+    return request;
+  }, [backendBaseUrl]);
 
   const stopEpgRefresh = React.useCallback(() => {
     if (epgIntervalRef.current) clearInterval(epgIntervalRef.current);
@@ -102,20 +120,10 @@ export function useEpg({ apiUrl, jget, backendBaseUrl }: UseEpgOptions) {
 
     stopEpgRefresh();
     try {
-      const externalEpg = await loadExternalEpg();
+      let entries = await loadExternalEntries(epgChannelId, channelName);
       if (requestId !== epgRequestRef.current) return;
 
-      const keyCandidates = [
-        normalizeChannelKey(epgChannelId),
-        normalizeChannelKey(channelName),
-      ].filter(Boolean);
-
-      const externalEntries = keyCandidates
-        .map((k) => externalEpg?.get(k) || [])
-        .find((list) => list.length) || [];
-
-      let entries = externalEntries;
-      let source: 'external' | 'default' = entries.length ? 'external' : 'default';
+      const source: 'external' | 'default' = entries.length ? 'external' : 'default';
 
       if (!entries.length) {
         const data = await jget(apiUrl({ action: 'get_short_epg', stream_id: String(streamId), limit: '2' })) as Record<string, unknown>;
@@ -127,6 +135,8 @@ export function useEpg({ apiUrl, jget, backendBaseUrl }: UseEpgOptions) {
             const start = parseEpgTs(e.start_timestamp ?? e.start ?? e.start_ts ?? e.begin ?? e.from);
             const end = parseEpgTs(e.stop_timestamp ?? e.end_timestamp ?? e.end ?? e.stop ?? e.to);
             return {
+              // Xtream panels commonly base64-encode these; XMLTV titles are
+              // plain text and must not go through the same decoder.
               title: decodePossiblyBase64Utf8(e.title ?? e.name ?? e.programme_title ?? ''),
               start,
               end,
@@ -169,6 +179,9 @@ export function useEpg({ apiUrl, jget, backendBaseUrl }: UseEpgOptions) {
         });
 
         if (!next && nowSec >= cur.end - 10 && requestId === epgRequestRef.current) {
+          // Out of entries — drop the cached window so the refetch gets a
+          // fresh one rather than replaying the same exhausted list.
+          externalCacheRef.current.delete(cacheKeyFor(epgChannelId, channelName));
           void fetchEpg(streamId, epgChannelId, channelName);
         }
       };
@@ -180,7 +193,7 @@ export function useEpg({ apiUrl, jget, backendBaseUrl }: UseEpgOptions) {
       stopEpgRefresh();
       setEpg(null);
     }
-  }, [apiUrl, jget, loadExternalEpg, normalizeChannelKey, stopEpgRefresh]);
+  }, [apiUrl, jget, loadExternalEntries, stopEpgRefresh]);
 
   React.useEffect(() => {
     return () => {
