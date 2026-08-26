@@ -2,11 +2,11 @@ import { send } from '../utils.js';
 import { getEpgIndex } from '../epg/store.js';
 import { lookupChannel } from '../epg/xmltv.js';
 
-// The client paints "now" and "next" and refetches as a programme ends, so it
-// only ever needs a window around the present — not the feed's full week.
-const WINDOW_BEHIND_SEC = 3 * 60 * 60;
-const WINDOW_AHEAD_SEC = 12 * 60 * 60;
-const MAX_PROGRAMMES = 64;
+// Keep enough history and future data for the full-screen guide to move across
+// the feed's week without shipping an unbounded channel history to the client.
+const WINDOW_BEHIND_SEC = 24 * 60 * 60;
+const WINDOW_AHEAD_SEC = 7 * 24 * 60 * 60;
+const MAX_PROGRAMMES = 512;
 
 function sendJson(res, status, payload) {
   if (res.headersSent) return send(res, status, 'application/json; charset=utf-8', JSON.stringify(payload));
@@ -22,8 +22,8 @@ function sendJson(res, status, payload) {
 /**
  * GET /epg?url=<xmltv>&channel=<epg_channel_id>&name=<channel name>
  *
- * Resolves one channel against a cached, server-parsed guide and returns the
- * programmes around now. Always 200 on a reachable guide — an unmatched
+ * Resolves one channel against a cached, server-parsed guide and returns its
+ * browseable schedule window. Always 200 on a reachable guide — an unmatched
  * channel is a normal answer ({ matched: false }), not an error.
  */
 export async function handleEpg(res, url) {

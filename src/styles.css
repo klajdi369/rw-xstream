@@ -134,8 +134,9 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
 }
 .hudHint .hintDim kbd { font-size: 12px; padding: 0 6px; }
 
-#settingsBtn {
-  display: block; margin-top: 12px; padding: 9px 16px;
+#settingsBtn,
+#guideBtn {
+  display: block; padding: 9px 16px;
   background: rgba(255, 255, 255, .06);
   border: 1px solid rgba(255, 255, 255, .12);
   border-radius: 10px; color: var(--text); font-size: 15px; font-weight: 600;
@@ -143,12 +144,17 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   transition: background .15s, border-color .15s, box-shadow .15s;
 }
 #settingsBtn:hover,
-#settingsBtn:focus {
+#settingsBtn:focus,
+#guideBtn:hover,
+#guideBtn:focus {
   background: rgba(58, 160, 255, .18);
   border-color: var(--foc);
   box-shadow: 0 0 0 3px rgba(58, 160, 255, .12);
   outline: none;
 }
+
+.hudButtons { margin-top: 12px; display: flex; gap: 8px; }
+#guideBtn { border-color: rgba(29, 209, 161, .24); }
 
 /* ─── Resume badge ─── */
 #resumeBadge {
@@ -328,6 +334,7 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
 .field label { font-size: 14px; color: rgba(232, 240, 250, .65); font-weight: 500; }
+.fieldHint { margin-left: 6px; color: var(--muted); font-size: 11px; font-weight: 500; }
 .field input {
   font-size: 17px; padding: 13px 16px; border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, .10);
@@ -557,4 +564,544 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   color: #ff8f8f;
   font-size: 15px;
   font-weight: 700;
+}
+
+/* ─── Full-screen EPG ─── */
+#epgGuide {
+  --guide-channel-width: clamp(220px, 21vw, 340px);
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 72% -20%, rgba(58, 160, 255, .16), transparent 40%),
+    linear-gradient(180deg, #0c111a 0%, #070a10 100%);
+  animation: guideIn .2s ease-out;
+}
+
+@keyframes guideIn {
+  from { opacity: 0; transform: scale(.995); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.guideHeader {
+  min-height: 92px;
+  padding: 15px clamp(18px, 2.4vw, 38px);
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) auto minmax(190px, 1fr);
+  align-items: center;
+  gap: 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, .09);
+  background: rgba(6, 9, 14, .88);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .18);
+}
+
+.guideIdentity h1 {
+  margin: 1px 0 0;
+  font-size: clamp(25px, 2.2vw, 34px);
+  line-height: 1;
+  letter-spacing: -.7px;
+}
+
+.guideEyebrow {
+  max-width: 32vw;
+  overflow: hidden;
+  color: var(--acc);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.35px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.guideDateControls,
+.guideActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.guideActions { justify-content: flex-end; }
+
+.guideDateControls button,
+.guideActions button,
+.guideDetailsTime button {
+  height: 42px;
+  border: 1px solid rgba(255, 255, 255, .11);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .055);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  transition: background .15s, border-color .15s, transform .1s, box-shadow .15s;
+}
+
+.guideDateControls button:hover,
+.guideDateControls button:focus,
+.guideActions button:hover,
+.guideActions button:focus,
+.guideDetailsTime button:hover,
+.guideDetailsTime button:focus {
+  border-color: rgba(58, 160, 255, .65);
+  background: rgba(58, 160, 255, .14);
+  box-shadow: 0 0 0 3px rgba(58, 160, 255, .1);
+  outline: none;
+}
+
+.guideDateControls > button:first-child,
+.guideDateControls > button:nth-child(3),
+.guideClose {
+  width: 42px;
+  padding: 0;
+  font-size: 25px;
+}
+
+.guideDateButton {
+  width: 154px;
+  height: 52px !important;
+  padding: 5px 15px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  line-height: 1.25;
+  text-align: left;
+}
+
+.guideDateButton span { font-size: 14px; }
+.guideDateButton small { color: var(--muted); font-size: 11px; font-weight: 600; }
+
+.guideLiveButton {
+  padding: 0 14px;
+  border-color: rgba(29, 209, 161, .26) !important;
+  color: var(--acc) !important;
+}
+
+.guideLiveButton > span {
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  display: inline-block;
+  border-radius: 50%;
+  background: var(--acc);
+  box-shadow: 0 0 9px rgba(29, 209, 161, .7);
+}
+
+.guideActions > button:not(.guideClose) { padding: 0 14px; }
+.guideActions button:disabled { opacity: .4; cursor: default; }
+
+.guideCoverage {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.guideLoadBar {
+  height: 2px;
+  flex: 0 0 2px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, .03);
+}
+
+.guideLoadBar > div {
+  height: 100%;
+  background: var(--acc);
+  opacity: 0;
+  transition: width .18s ease, opacity .3s ease;
+}
+
+.guideLoadBar > div.loading {
+  opacity: 1;
+  box-shadow: 0 0 12px rgba(29, 209, 161, .55);
+}
+
+.guideTable {
+  min-height: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+.guideTimelineHeader {
+  height: 50px;
+  flex: 0 0 50px;
+  display: grid;
+  grid-template-columns: var(--guide-channel-width) minmax(0, 1fr);
+  border-bottom: 1px solid rgba(255, 255, 255, .1);
+  background: rgba(7, 10, 16, .96);
+}
+
+.guideChannelHeading {
+  padding: 0 22px;
+  display: flex;
+  align-items: center;
+  border-right: 1px solid rgba(255, 255, 255, .1);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+
+.guideTimes {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+}
+
+.guideTimes > div {
+  position: relative;
+  padding: 16px 0 0 10px;
+  border-left: 1px solid rgba(255, 255, 255, .035);
+  color: rgba(232, 240, 250, .42);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.guideTimes > div.hour {
+  border-left-color: rgba(255, 255, 255, .11);
+  color: rgba(232, 240, 250, .74);
+  font-weight: 700;
+}
+
+.guideRows {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  scrollbar-color: #2a3444 transparent;
+  scrollbar-width: thin;
+}
+
+.guideRow {
+  height: 76px;
+  display: grid;
+  grid-template-columns: var(--guide-channel-width) minmax(0, 1fr);
+  border-bottom: 1px solid rgba(255, 255, 255, .055);
+  background: rgba(255, 255, 255, .008);
+  transition: background .12s ease;
+}
+
+.guideRow:nth-child(even) { background: rgba(255, 255, 255, .018); }
+.guideRow:hover { background: rgba(255, 255, 255, .035); }
+.guideRow.selectedChannel { background: rgba(58, 160, 255, .055); }
+
+.guideChannel {
+  min-width: 0;
+  padding: 0 17px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  border: 0;
+  border-right: 1px solid rgba(255, 255, 255, .1);
+  border-left: 3px solid transparent;
+  background: rgba(7, 10, 16, .56);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.selectedChannel .guideChannel {
+  border-left-color: var(--foc);
+  background: rgba(58, 160, 255, .09);
+}
+
+.guideChannel.playing { border-left-color: var(--acc); }
+
+.guideChannelNumber {
+  width: 26px;
+  flex: 0 0 26px;
+  color: rgba(232, 240, 250, .32);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.guideChannelMark {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, .09);
+  border-radius: 9px;
+  background: linear-gradient(145deg, rgba(58, 160, 255, .18), rgba(29, 209, 161, .07));
+  color: rgba(232, 240, 250, .8);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.guideChannelName {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.guidePlayingDot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+  background: var(--acc);
+  box-shadow: 0 0 10px rgba(29, 209, 161, .8);
+}
+
+.guideTrack {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  background-image: repeating-linear-gradient(
+    to right,
+    transparent 0,
+    transparent calc(12.5% - 1px),
+    rgba(255, 255, 255, .035) calc(12.5% - 1px),
+    rgba(255, 255, 255, .035) 12.5%
+  );
+}
+
+.guideProgramme {
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  min-width: 0;
+  padding: 8px 10px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, .075);
+  border-radius: 8px;
+  background: #151c27;
+  color: rgba(232, 240, 250, .9);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .12s, background .12s, box-shadow .12s, transform .12s;
+}
+
+.guideProgramme::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 2px;
+  background: #080b11;
+}
+
+.guideProgramme:hover {
+  z-index: 2;
+  border-color: rgba(58, 160, 255, .45);
+  background: #192536;
+}
+
+.guideProgramme.live {
+  border-color: rgba(29, 209, 161, .33);
+  background: linear-gradient(135deg, rgba(29, 209, 161, .2), rgba(20, 42, 44, .92));
+}
+
+.guideProgramme.past { opacity: .45; }
+
+.guideProgramme.selected {
+  z-index: 3;
+  border-color: var(--foc);
+  background: #1c334d;
+  box-shadow: inset 0 0 0 1px rgba(58, 160, 255, .4), 0 0 0 2px rgba(58, 160, 255, .24);
+  transform: translateY(-1px);
+}
+
+.guideProgramme.live.selected {
+  border-color: var(--acc);
+  background: #174239;
+  box-shadow: inset 0 0 0 1px rgba(29, 209, 161, .42), 0 0 0 2px rgba(29, 209, 161, .22);
+}
+
+.guideProgramme strong,
+.guideProgramme span {
+  display: block;
+  overflow: hidden;
+  line-height: 1.22;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.guideProgramme strong { font-size: 13px; }
+.guideProgramme span { margin-top: 5px; color: rgba(232, 240, 250, .45); font-size: 10px; }
+
+.guideNowLine {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #ff5364;
+  pointer-events: none;
+  box-shadow: 0 0 7px rgba(255, 83, 100, .62);
+}
+
+.guideNowLine span {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  transform: translate(-50%, -35%);
+  border-radius: 50%;
+  background: #ff5364;
+}
+
+.guideRowState {
+  position: absolute;
+  inset: 0;
+  padding-left: 18px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: rgba(232, 240, 250, .3);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.guideRowState.error { color: rgba(255, 130, 130, .55); }
+
+.guideRowState.loading span {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, .08);
+  border-top-color: var(--foc);
+  border-radius: 50%;
+  animation: rot .9s linear infinite;
+}
+
+.guideDetails {
+  min-height: 126px;
+  padding: 15px clamp(18px, 2.4vw, 38px);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px 30px;
+  border-top: 1px solid rgba(255, 255, 255, .1);
+  background: rgba(5, 8, 13, .96);
+  box-shadow: 0 -10px 28px rgba(0, 0, 0, .2);
+}
+
+.guideDetailsMain { min-width: 0; }
+
+.guideDetailMeta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.guideDetailMeta > span + span::before {
+  content: '·';
+  margin-right: 7px;
+  color: rgba(232, 240, 250, .25);
+}
+
+.guideSource.external { color: var(--acc); }
+.guideSource.default { color: var(--foc); }
+
+.guideDetailTitle {
+  margin-top: 4px;
+  display: block;
+  overflow: hidden;
+  font-size: clamp(17px, 1.5vw, 22px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.guideDescription {
+  max-width: 900px;
+  margin-top: 4px;
+  overflow: hidden;
+  color: rgba(232, 240, 250, .48);
+  display: -webkit-box;
+  font-size: 12px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.guideDetailsTime {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  color: rgba(232, 240, 250, .8);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.guideDetailsTime > span { color: var(--muted); }
+.guideDetailsTime button { height: 34px; margin-top: 5px; padding: 0 14px; border-color: rgba(29, 209, 161, .28); }
+
+.guideRemoteHelp {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  color: rgba(232, 240, 250, .38);
+  font-size: 10px;
+}
+
+.guideRemoteHelp span { white-space: nowrap; }
+
+.guideRemoteHelp kbd {
+  min-width: 20px;
+  margin-right: 3px;
+  padding: 2px 5px;
+  display: inline-block;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .055);
+  color: rgba(232, 240, 250, .65);
+  font-family: inherit;
+  font-size: 9px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.guideEmpty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.guideEmpty strong { color: var(--text); font-size: 22px; }
+
+@media (max-width: 900px) {
+  #epgGuide { --guide-channel-width: 190px; }
+  .guideHeader { grid-template-columns: 1fr auto; gap: 12px; }
+  .guideDateControls { grid-row: 2; grid-column: 1 / -1; justify-content: center; }
+  .guideCoverage { display: none; }
+  .guideChannel { padding: 0 9px; gap: 7px; }
+  .guideChannelMark { width: 28px; height: 28px; flex-basis: 28px; }
+  .guideChannelNumber { width: 20px; flex-basis: 20px; }
+  .guideRemoteHelp { display: none; }
+}
+
+@media (max-height: 700px) {
+  .guideHeader { min-height: 72px; padding-top: 9px; padding-bottom: 9px; }
+  .guideDateButton { height: 42px !important; }
+  .guideTimelineHeader { height: 42px; flex-basis: 42px; }
+  .guideTimes > div { padding-top: 12px; }
+  .guideRow { height: 64px; }
+  .guideDetails { min-height: 92px; padding-top: 10px; padding-bottom: 10px; }
+  .guideDescription { -webkit-line-clamp: 1; }
+  .guideRemoteHelp { display: none; }
 }

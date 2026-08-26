@@ -11,6 +11,9 @@ const PROGRAMME_RE = /<programme\b([^>]*?)(?:\/>|>([\s\S]*?)<\/programme\s*>)/gi
 const ATTR_RE = /([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
 const DISPLAY_NAME_RE = /<display-name\b[^>]*>([\s\S]*?)<\/display-name\s*>/gi;
 const TITLE_RE = /<title\b[^>]*>([\s\S]*?)<\/title\s*>/i;
+const SUB_TITLE_RE = /<sub-title\b[^>]*>([\s\S]*?)<\/sub-title\s*>/i;
+const DESC_RE = /<desc\b[^>]*>([\s\S]*?)<\/desc\s*>/i;
+const CATEGORY_RE = /<category\b[^>]*>([\s\S]*?)<\/category\s*>/i;
 
 const NAMED_ENTITIES = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
@@ -100,7 +103,7 @@ export function parseXmltvTs(value) {
 }
 
 /**
- * @typedef {{ title: string, start: number, stop: number }} Programme
+ * @typedef {{ title: string, start: number, stop: number, description?: string, category?: string }} Programme
  * @typedef {{
  *   programmes: Map<string, Programme[]>,
  *   byId: Map<string, string>,
@@ -166,12 +169,27 @@ export function buildEpgIndex(xml) {
     const stop = parseXmltvTs(attrs.stop);
     if (!(start > 0 && stop > start)) continue;
 
-    const title = textContent((match[2] ?? '').match(TITLE_RE)?.[1] ?? '');
+    const inner = match[2] ?? '';
+    const baseTitle = textContent(inner.match(TITLE_RE)?.[1] ?? '');
+    const subTitle = textContent(inner.match(SUB_TITLE_RE)?.[1] ?? '');
+    const title = baseTitle && subTitle && !baseTitle.toLowerCase().includes(subTitle.toLowerCase())
+      ? `${baseTitle}: ${subTitle}`
+      : (baseTitle || subTitle);
     if (!title) continue;
 
+    const description = textContent(inner.match(DESC_RE)?.[1] ?? '');
+    const category = textContent(inner.match(CATEGORY_RE)?.[1] ?? '');
+    const programme = {
+      title,
+      start,
+      stop,
+      ...(description ? { description } : {}),
+      ...(category ? { category } : {}),
+    };
+
     const list = programmes.get(key);
-    if (list) list.push({ title, start, stop });
-    else programmes.set(key, [{ title, start, stop }]);
+    if (list) list.push(programme);
+    else programmes.set(key, [programme]);
     programmeCount += 1;
 
     // Feeds are not obliged to declare every channel they carry, so a

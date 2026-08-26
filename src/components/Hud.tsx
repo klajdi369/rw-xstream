@@ -5,6 +5,7 @@ type Props = {
   subtitle: string;
   hidden: boolean;
   onOpenSettings: () => void;
+  onOpenGuide: () => void;
   keyIndicator?: string;
   epg?: {
     nowTitle: string;
@@ -15,7 +16,7 @@ type Props = {
   } | null;
 };
 
-export function Hud({ title, subtitle, hidden, onOpenSettings, keyIndicator, epg }: Props) {
+export function Hud({ title, subtitle, hidden, onOpenSettings, onOpenGuide, keyIndicator, epg }: Props) {
   return (
     <div id="hud" className={hidden ? 'hide' : ''}>
       <div className="hudInfo">
@@ -40,9 +41,13 @@ export function Hud({ title, subtitle, hidden, onOpenSettings, keyIndicator, epg
         <kbd>CH+</kbd> <kbd>CH&#x2212;</kbd> jump 8<br />
         <kbd>0</kbd>&ndash;<kbd>9</kbd> go to number<br />
         <kbd>Blue</kbd> / <kbd>Pause</kbd> set order<br />
+        <kbd>Green</kbd> / <kbd>Guide</kbd> TV guide<br />
         <kbd>Red</kbd> / <kbd>Menu</kbd> settings<br />
         <span className="hintDim">In list: <kbd>/</kbd> or <kbd>&#x2191;</kbd> search &middot; <kbd>&#x2190;</kbd><kbd>&#x2192;</kbd> panels</span>
-        <button id="settingsBtn" onClick={onOpenSettings}>Settings</button>
+        <div className="hudButtons">
+          <button id="guideBtn" onClick={onOpenGuide}>TV Guide</button>
+          <button id="settingsBtn" onClick={onOpenSettings}>Settings</button>
+        </div>
       </div>
     </div>
   );
