@@ -1,5 +1,7 @@
 export const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 
+export const cx = (...tokens: Array<string | false | null | undefined>) => tokens.filter(Boolean).join(' ');
+
 export function normServer(s: string) {
   const t = (s || '').trim();
   if (!t) return '';

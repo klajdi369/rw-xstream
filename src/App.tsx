@@ -12,6 +12,7 @@ import { usePlayback } from './hooks/usePlayback';
 import { useProxyMemory } from './hooks/useProxyMemory';
 import { useToast } from './hooks/useToast';
 import { Category, Channel, LastChannel } from './types/player';
+import { isGuideToggle } from './epg/remote';
 import {
   CATEGORY_UNLOCK_PRESS_COUNT,
   CATEGORY_UNLOCK_WINDOW_MS,
@@ -528,7 +529,7 @@ export default function App() {
       if (epgGuideOpen) return;
 
       // Green / Guide opens the full schedule from either the player or list.
-      if (['Guide', 'Epg', 'EPG', 'ColorF1Green', 'Green', 'g', 'G'].includes(e.key)) {
+      if (isGuideToggle(e)) {
         e.preventDefault();
         setSidebarOpen(false);
         setEpgGuideOpen(true);

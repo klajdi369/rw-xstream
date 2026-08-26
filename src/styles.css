@@ -582,6 +582,8 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   animation: guideIn .2s ease-out;
 }
 
+#epgGuide:focus { outline: none; }
+
 @keyframes guideIn {
   from { opacity: 0; transform: scale(.995); }
   to { opacity: 1; transform: scale(1); }
@@ -604,6 +606,29 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   font-size: clamp(25px, 2.2vw, 34px);
   line-height: 1;
   letter-spacing: -.7px;
+}
+
+.guideQuickHelp {
+  margin-top: 7px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: rgba(232, 240, 250, .42);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.guideQuickHelp span { display: inline-flex; align-items: center; gap: 4px; }
+
+.guideQuickHelp kbd {
+  padding: 1px 5px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .06);
+  color: rgba(232, 240, 250, .76);
+  font-family: inherit;
+  font-size: 9px;
+  font-weight: 800;
 }
 
 .guideEyebrow {
@@ -1089,6 +1114,8 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   .guideHeader { grid-template-columns: 1fr auto; gap: 12px; }
   .guideDateControls { grid-row: 2; grid-column: 1 / -1; justify-content: center; }
   .guideCoverage { display: none; }
+  .guideQuickHelp { gap: 6px; }
+  .guideQuickHelp span:nth-child(2) { display: none; }
   .guideChannel { padding: 0 9px; gap: 7px; }
   .guideChannelMark { width: 28px; height: 28px; flex-basis: 28px; }
   .guideChannelNumber { width: 20px; flex-basis: 20px; }
