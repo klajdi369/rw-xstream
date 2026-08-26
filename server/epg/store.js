@@ -16,13 +16,28 @@ const MAX_BYTES = 96 * 1024 * 1024;
 const MAX_CACHED_FEEDS = 4;
 // How long a failed refresh suppresses further attempts for that feed.
 const RETRY_COOLDOWN_MS = 60 * 1000;
+// Invalid or unreachable URLs should not grow the failure registry forever.
+const MAX_FAILED_FEEDS = 32;
 
 /** @type {Map<string, { fetchedAt: number, index: import('./xmltv.js').EpgIndex }>} */
 const cache = new Map();
 /** @type {Map<string, Promise<import('./xmltv.js').EpgIndex>>} */
 const inFlight = new Map();
-/** @type {Map<string, number>} */
+/** @type {Map<string, { failedAt: number, message: string }>} */
 const failedAt = new Map();
+
+function rememberFailure(url, err) {
+  failedAt.delete(url);
+  failedAt.set(url, {
+    failedAt: Date.now(),
+    message: err?.message || String(err),
+  });
+  while (failedAt.size > MAX_FAILED_FEEDS) {
+    const oldest = failedAt.keys().next();
+    if (oldest.done) break;
+    failedAt.delete(oldest.value);
+  }
+}
 
 /** Decode a guide body, honouring the encoding its XML declaration announces. */
 function decodeXml(buffer) {
@@ -94,9 +109,10 @@ export async function getEpgIndex(url) {
 
   // A guide that just failed shouldn't be re-fetched on every zap; keep
   // serving what we have until the cool-off expires.
-  const lastFailure = failedAt.get(url) ?? 0;
-  if (cached && Date.now() - lastFailure < RETRY_COOLDOWN_MS) {
-    return { index: cached.index, fetchedAt: cached.fetchedAt, stale: true };
+  const lastFailure = failedAt.get(url);
+  if (lastFailure && Date.now() - lastFailure.failedAt < RETRY_COOLDOWN_MS) {
+    if (cached) return { index: cached.index, fetchedAt: cached.fetchedAt, stale: true };
+    throw new Error(`guide temporarily unavailable: ${lastFailure.message}`);
   }
 
   let pending = inFlight.get(url);
@@ -114,7 +130,7 @@ export async function getEpgIndex(url) {
     console.log(`[EPG] indexed ${url} channels=${index.channelCount} programmes=${index.programmeCount}`);
     return { index, fetchedAt, stale: false };
   } catch (err) {
-    failedAt.set(url, Date.now());
+    rememberFailure(url, err);
     if (cached) {
       console.warn(`[EPG] refresh failed for ${url}, serving cached copy: ${err?.message || err}`);
       return { index: cached.index, fetchedAt: cached.fetchedAt, stale: true };

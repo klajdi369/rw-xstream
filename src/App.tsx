@@ -411,6 +411,22 @@ export default function App() {
     playChannel(ch);
   }, [cancelPendingTune, playChannel]);
 
+  // The guide can tune a channel that is outside the currently filtered
+  // sidebar. Restore the complete list and move the shared cursor to the tuned
+  // channel so the next Arrow press and the next guide opening start there.
+  const playFromGuide = React.useCallback((ch: Channel | undefined) => {
+    if (!ch) return;
+    const channelIndex = guideChannels.findIndex((candidate) => (
+      String(candidate.stream_id) === String(ch.stream_id)
+    ));
+    const completeList = cacheRef.current.get(activeCatRef.current || '');
+
+    setChQuery('');
+    if (completeList) setChannels(completeList);
+    if (channelIndex >= 0) setSelCh(channelIndex);
+    playNow(ch);
+  }, [guideChannels, playNow]);
+
   // Arrow keys pressed while a sidebar search field is focused. The field blurs
   // itself first; here we just apply the resulting navigation so you can leave
   // the search box — and switch panels — without getting stuck typing.
@@ -813,7 +829,7 @@ export default function App() {
         initialChannelId={channelList[selCh]?.stream_id != null ? String(channelList[selCh].stream_id) : playingId}
         categoryName={activeCatName}
         loadSchedule={loadSchedule}
-        onTune={playNow}
+        onTune={playFromGuide}
         onClose={() => setEpgGuideOpen(false)}
       />
 

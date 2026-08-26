@@ -48,12 +48,6 @@ export function programmeDuration(programme: EpgProgramme) {
   return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 }
 
-export function programmeAt(schedule: EpgSchedule | undefined, target: number) {
-  if (!schedule?.programmes.length) return undefined;
-  return schedule.programmes.find((programme) => programme.start <= target && programme.end > target)
-    || schedule.programmes.find((programme) => programme.start > target);
-}
-
 export function programmesInWindow(schedule: EpgSchedule | undefined, start: number, end: number) {
   return schedule?.programmes.filter((programme) => programme.end > start && programme.start < end) || [];
 }

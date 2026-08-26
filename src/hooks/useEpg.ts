@@ -133,8 +133,12 @@ export function useEpg({ apiUrl, jget, backendBaseUrl, epgUrl }: UseEpgOptions) 
     const request = (async (): Promise<EpgSchedule> => {
       const external = await loadExternalEntries(channel.epg_channel_id, channel.name, force);
       let schedule: EpgSchedule;
+      const currentTime = Date.now() / 1000;
+      const externalCoversNow = external.programmes.some((programme) => (
+        programme.start <= currentTime && programme.end > currentTime
+      ));
 
-      if (external.programmes.length) {
+      if (externalCoversNow) {
         schedule = {
           programmes: external.programmes,
           source: 'external',
@@ -152,21 +156,45 @@ export function useEpg({ apiUrl, jget, backendBaseUrl, epgUrl }: UseEpgOptions) 
             limit: '64',
           }));
           const programmes = parseProviderProgrammes(data);
-          schedule = {
-            programmes,
-            source: programmes.length ? 'default' : 'none',
-            stale: false,
-            updatedAt: Date.now(),
-            error: programmes.length ? undefined : external.error,
-          };
+          const providerCoversNow = programmes.some((programme) => (
+            programme.start <= currentTime && programme.end > currentTime
+          ));
+
+          if (providerCoversNow || !external.programmes.length) {
+            schedule = {
+              programmes,
+              source: programmes.length ? 'default' : 'none',
+              stale: false,
+              updatedAt: Date.now(),
+              error: programmes.length ? undefined : external.error,
+            };
+          } else {
+            // The open guide still has useful history/future listings, even if
+            // neither source can describe what is airing at this instant.
+            schedule = {
+              programmes: external.programmes,
+              source: 'external',
+              stale: external.stale,
+              updatedAt: Date.now(),
+              error: external.error,
+            };
+          }
         } catch (error) {
-          schedule = {
-            programmes: [],
-            source: 'none',
-            stale: false,
-            updatedAt: Date.now(),
-            error: external.error || (error as Error)?.message || 'Guide unavailable',
-          };
+          schedule = external.programmes.length
+            ? {
+                programmes: external.programmes,
+                source: 'external',
+                stale: external.stale,
+                updatedAt: Date.now(),
+                error: external.error,
+              }
+            : {
+                programmes: [],
+                source: 'none',
+                stale: false,
+                updatedAt: Date.now(),
+                error: external.error || (error as Error)?.message || 'Guide unavailable',
+              };
         }
       }
 
@@ -221,12 +249,26 @@ export function useEpg({ apiUrl, jget, backendBaseUrl, epgUrl }: UseEpgOptions) 
           setEpg(null);
           return;
         }
-        const nowSec = Date.now() / 1000;
-        let currentIndex = entries.findIndex((entry) => entry.start <= nowSec && entry.end > nowSec);
 
+        // Refresh a long-running player's schedule in place. Do this before
+        // looking for the current programme so a schedule gap can recover too.
+        if (!refreshPending && Date.now() - activeSchedule.updatedAt >= EPG_TTL_MS) {
+          refreshPending = true;
+          void loadSchedule(channel, true)
+            .then((fresh) => {
+              if (requestId !== epgRequestRef.current) return;
+              activeSchedule = fresh;
+              entries = fresh.programmes;
+              paint();
+            })
+            .finally(() => { refreshPending = false; });
+        }
+
+        const nowSec = Date.now() / 1000;
+        const currentIndex = entries.findIndex((entry) => entry.start <= nowSec && entry.end > nowSec);
         if (currentIndex < 0) {
-          const firstFuture = entries.findIndex((entry) => entry.start > nowSec);
-          currentIndex = firstFuture >= 0 ? firstFuture : entries.length - 1;
+          setEpg(null);
+          return;
         }
 
         const current = entries[currentIndex];
@@ -244,19 +286,6 @@ export function useEpg({ apiUrl, jget, backendBaseUrl, epgUrl }: UseEpgOptions) 
           source: epgSource,
         });
 
-        // Refresh a long-running player's schedule in place. This keeps both
-        // the HUD and its underlying cache current without interrupting video.
-        if (!refreshPending && Date.now() - activeSchedule.updatedAt >= EPG_TTL_MS) {
-          refreshPending = true;
-          void loadSchedule(channel, true)
-            .then((fresh) => {
-              if (requestId !== epgRequestRef.current) return;
-              activeSchedule = fresh;
-              entries = fresh.programmes;
-              paint();
-            })
-            .finally(() => { refreshPending = false; });
-        }
       };
 
       paint();

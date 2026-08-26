@@ -71,6 +71,16 @@ export function EpgGuide({
     const action = guideRemoteAction(event.nativeEvent);
     if (!action) return;
 
+    // Preserve normal keyboard activation for the header's tabbable controls.
+    // Remote focus normally stays on the guide surface; this branch is for
+    // keyboard/mouse users who explicitly focused a button inside it.
+    if (
+      action === 'watch'
+      && event.target !== event.currentTarget
+      && event.target instanceof HTMLElement
+      && event.target.tabIndex >= 0
+    ) return;
+
     event.preventDefault();
     event.stopPropagation();
 
