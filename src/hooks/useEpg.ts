@@ -1,88 +1,210 @@
 import React from 'react';
-import { fmtTime, decodePossiblyBase64Utf8, parseEpgTs } from '../utils';
-
-export interface EpgEntry {
-  nowTitle: string;
-  nowTime: string;
-  progress: number;
-  next: string;
-  source: 'external' | 'default';
-}
+import { BoundedTtlCache } from '../epg/cache';
+import { parseExternalProgrammes, parseProviderProgrammes } from '../epg/parsers';
+import type { ExternalEpgResponse } from '../epg/parsers';
+import type { EpgEntry, EpgSchedule, EpgSource, LoadEpgSchedule } from '../epg/types';
+import type { Channel } from '../types/player';
+import { fmtTime } from '../utils';
 
 interface UseEpgOptions {
   apiUrl: (params: Record<string, string>) => string;
   jget: (url: string) => Promise<unknown>;
   backendBaseUrl: string;
+  epgUrl: string;
 }
 
-const EXTERNAL_EPG_URL = 'https://www.open-epg.com/files/albania1.xml';
-const EXTERNAL_EPG_TTL_MS = 10 * 60 * 1000;
+interface ExternalResult {
+  programmes: EpgSchedule['programmes'];
+  stale: boolean;
+  error?: string;
+}
 
-export function useEpg({ apiUrl, jget, backendBaseUrl }: UseEpgOptions) {
+const EPG_TTL_MS = 10 * 60 * 1000;
+// A set-top box can stay up for weeks. Bound both caches so channel surfing
+// cannot retain every schedule ever visited for the lifetime of the page.
+const EPG_MAX_CACHED_CHANNELS = 160;
+
+function externalCacheKey(epgUrl: string, epgChannelId?: string | null, channelName?: string) {
+  return JSON.stringify([epgUrl.trim(), String(epgChannelId ?? '').trim(), String(channelName ?? '').trim()]);
+}
+
+function scheduleCacheKey(
+  epgUrl: string,
+  providerGeneration: number,
+  streamId: string | number,
+  epgChannelId?: string | null,
+  channelName?: string,
+) {
+  return JSON.stringify([
+    epgUrl.trim(),
+    providerGeneration,
+    String(streamId),
+    String(epgChannelId ?? '').trim(),
+    String(channelName ?? '').trim(),
+  ]);
+}
+
+const providerIds = new WeakMap<UseEpgOptions['apiUrl'], number>();
+let nextProviderId = 1;
+
+function providerId(apiUrl: UseEpgOptions['apiUrl']) {
+  const existing = providerIds.get(apiUrl);
+  if (existing) return existing;
+  const id = nextProviderId;
+  nextProviderId += 1;
+  providerIds.set(apiUrl, id);
+  return id;
+}
+
+export function useEpg({ apiUrl, jget, backendBaseUrl, epgUrl }: UseEpgOptions) {
   const [epg, setEpg] = React.useState<EpgEntry | null>(null);
   const epgIntervalRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
   const epgRequestRef = React.useRef(0);
-  const externalEpgRef = React.useRef<{ fetchedAt: number; byChannel: Map<string, { title: string; start: number; end: number }[]> }>({
-    fetchedAt: 0,
-    byChannel: new Map(),
-  });
-  const externalEpgLoadRef = React.useRef<Promise<Map<string, { title: string; start: number; end: number }[]> | null> | null>(null);
+  const externalCacheRef = React.useRef(new BoundedTtlCache<ExternalResult>(EPG_MAX_CACHED_CHANNELS, EPG_TTL_MS));
+  const externalInFlightRef = React.useRef(new Map<string, Promise<ExternalResult>>());
+  const scheduleCacheRef = React.useRef(new BoundedTtlCache<EpgSchedule>(EPG_MAX_CACHED_CHANNELS, EPG_TTL_MS));
+  const scheduleInFlightRef = React.useRef(new Map<string, Promise<EpgSchedule>>());
+  const activeProviderId = React.useMemo(() => providerId(apiUrl), [apiUrl]);
 
-  const normalizeChannelKey = React.useCallback((value: unknown): string => {
-    return String(value || '')
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, '');
-  }, []);
+  const loadExternalEntries = React.useCallback(async (
+    epgChannelId?: string | null,
+    channelName?: string,
+    force = false,
+  ): Promise<ExternalResult> => {
+    const channel = String(epgChannelId ?? '').trim();
+    const name = String(channelName ?? '').trim();
+    const guideUrl = epgUrl.trim();
+    if (!guideUrl || (!channel && !name)) return { programmes: [], stale: false };
 
-  const loadExternalEpg = React.useCallback(async () => {
-    const cache = externalEpgRef.current;
-    if (cache.byChannel.size > 0 && (Date.now() - cache.fetchedAt) < EXTERNAL_EPG_TTL_MS) {
-      return cache.byChannel;
-    }
-    if (externalEpgLoadRef.current) return externalEpgLoadRef.current;
+    const key = externalCacheKey(guideUrl, channel, name);
+    const stale = externalCacheRef.current.get(key, true);
+    const cached = force ? undefined : externalCacheRef.current.get(key);
+    if (cached) return cached;
 
-    externalEpgLoadRef.current = (async () => {
+    const inFlight = externalInFlightRef.current.get(key);
+    if (inFlight) return inFlight;
+
+    const request = (async (): Promise<ExternalResult> => {
       try {
-        const proxiedUrl = `${backendBaseUrl}/proxy?url=${encodeURIComponent(EXTERNAL_EPG_URL)}&deint=0`;
-        const res = await fetch(proxiedUrl, { cache: 'no-store' });
-        if (!res.ok) throw new Error(`EPG XML HTTP ${res.status}`);
-        const xml = await res.text();
-        const doc = new DOMParser().parseFromString(xml, 'application/xml');
-        if (doc.querySelector('parsererror')) throw new Error('Invalid XMLTV payload');
+        const query = new URLSearchParams({ url: guideUrl, channel, name });
+        const res = await fetch(`${backendBaseUrl}/epg?${query}`, { cache: 'no-store' });
+        const data = await res.json().catch(() => ({})) as ExternalEpgResponse;
+        if (!res.ok) throw new Error(data.error || `EPG HTTP ${res.status}`);
 
-        const byChannel = new Map<string, { title: string; start: number; end: number }[]>();
-        const programmes = Array.from(doc.querySelectorAll('programme'));
-        for (const p of programmes) {
-          const channel = p.getAttribute('channel') || '';
-          const key = normalizeChannelKey(channel);
-          if (!key) continue;
-
-          const start = parseEpgTs(p.getAttribute('start'));
-          const end = parseEpgTs(p.getAttribute('stop'));
-          if (!(start > 0 && end > start)) continue;
-
-          const title = decodePossiblyBase64Utf8(p.querySelector('title')?.textContent || '');
-          const list = byChannel.get(key) || [];
-          list.push({ title, start, end });
-          byChannel.set(key, list);
-        }
-
-        byChannel.forEach((list, key) => {
-          list.sort((a, b) => a.start - b.start);
-          byChannel.set(key, list);
-        });
-
-        externalEpgRef.current = { fetchedAt: Date.now(), byChannel };
-        return byChannel;
-      } catch {
-        return externalEpgRef.current.byChannel.size ? externalEpgRef.current.byChannel : null;
+        const result: ExternalResult = {
+          programmes: parseExternalProgrammes(data),
+          stale: data.stale === true,
+        };
+        externalCacheRef.current.set(key, result);
+        return result;
+      } catch (error) {
+        // A stale good answer is much more useful than a blank guide during a
+        // temporary feed outage. Mark it stale so the full guide can say so.
+        if (stale) return { ...stale, stale: true };
+        return {
+          programmes: [],
+          stale: false,
+          error: (error as Error)?.message || 'External guide unavailable',
+        };
       } finally {
-        externalEpgLoadRef.current = null;
+        externalInFlightRef.current.delete(key);
       }
     })();
 
-    return externalEpgLoadRef.current;
-  }, [backendBaseUrl, normalizeChannelKey]);
+    externalInFlightRef.current.set(key, request);
+    return request;
+  }, [backendBaseUrl, epgUrl]);
+
+  /** Load a complete schedule for the guide and for the compact now/next HUD. */
+  const loadSchedule = React.useCallback<LoadEpgSchedule>(async (channel: Channel, force = false) => {
+    const key = scheduleCacheKey(
+      epgUrl,
+      activeProviderId,
+      channel.stream_id,
+      channel.epg_channel_id,
+      channel.name,
+    );
+    const cached = force ? undefined : scheduleCacheRef.current.get(key);
+    if (cached) return cached;
+
+    const inFlight = scheduleInFlightRef.current.get(key);
+    if (inFlight) return inFlight;
+
+    const request = (async (): Promise<EpgSchedule> => {
+      const external = await loadExternalEntries(channel.epg_channel_id, channel.name, force);
+      let schedule: EpgSchedule;
+      const currentTime = Date.now() / 1000;
+      const externalCoversNow = external.programmes.some((programme) => (
+        programme.start <= currentTime && programme.end > currentTime
+      ));
+
+      if (externalCoversNow) {
+        schedule = {
+          programmes: external.programmes,
+          source: 'external',
+          stale: external.stale,
+          updatedAt: Date.now(),
+          error: external.error,
+        };
+      } else {
+        try {
+          // A larger limit makes the provider fallback useful as an actual
+          // guide instead of restricting it to the two HUD entries.
+          const data = await jget(apiUrl({
+            action: 'get_short_epg',
+            stream_id: String(channel.stream_id),
+            limit: '64',
+          }));
+          const programmes = parseProviderProgrammes(data);
+          const providerCoversNow = programmes.some((programme) => (
+            programme.start <= currentTime && programme.end > currentTime
+          ));
+
+          if (providerCoversNow || !external.programmes.length) {
+            schedule = {
+              programmes,
+              source: programmes.length ? 'default' : 'none',
+              stale: false,
+              updatedAt: Date.now(),
+              error: programmes.length ? undefined : external.error,
+            };
+          } else {
+            // The open guide still has useful history/future listings, even if
+            // neither source can describe what is airing at this instant.
+            schedule = {
+              programmes: external.programmes,
+              source: 'external',
+              stale: external.stale,
+              updatedAt: Date.now(),
+              error: external.error,
+            };
+          }
+        } catch (error) {
+          schedule = external.programmes.length
+            ? {
+                programmes: external.programmes,
+                source: 'external',
+                stale: external.stale,
+                updatedAt: Date.now(),
+                error: external.error,
+              }
+            : {
+                programmes: [],
+                source: 'none',
+                stale: false,
+                updatedAt: Date.now(),
+                error: external.error || (error as Error)?.message || 'Guide unavailable',
+              };
+        }
+      }
+
+      scheduleCacheRef.current.set(key, schedule);
+      return schedule;
+    })().finally(() => scheduleInFlightRef.current.delete(key));
+
+    scheduleInFlightRef.current.set(key, request);
+    return request;
+  }, [activeProviderId, apiUrl, epgUrl, jget, loadExternalEntries]);
 
   const stopEpgRefresh = React.useCallback(() => {
     if (epgIntervalRef.current) clearInterval(epgIntervalRef.current);
@@ -91,102 +213,91 @@ export function useEpg({ apiUrl, jget, backendBaseUrl }: UseEpgOptions) {
 
   const clearEpg = React.useCallback(() => {
     epgRequestRef.current += 1;
-    if (epgIntervalRef.current) clearInterval(epgIntervalRef.current);
-    epgIntervalRef.current = null;
+    stopEpgRefresh();
     setEpg(null);
-  }, []);
+  }, [stopEpgRefresh]);
 
-  const fetchEpg = React.useCallback(async (streamId: string | number, epgChannelId?: string | null, channelName?: string) => {
+  const fetchEpg = React.useCallback(async (
+    streamId: string | number,
+    epgChannelId?: string | null,
+    channelName?: string,
+  ) => {
     const requestId = epgRequestRef.current + 1;
     epgRequestRef.current = requestId;
-
     stopEpgRefresh();
+
     try {
-      const externalEpg = await loadExternalEpg();
+      const channel: Channel = {
+        stream_id: streamId,
+        epg_channel_id: epgChannelId,
+        name: channelName || 'Channel',
+      };
+      const schedule = await loadSchedule(channel);
       if (requestId !== epgRequestRef.current) return;
 
-      const keyCandidates = [
-        normalizeChannelKey(epgChannelId),
-        normalizeChannelKey(channelName),
-      ].filter(Boolean);
-
-      const externalEntries = keyCandidates
-        .map((k) => externalEpg?.get(k) || [])
-        .find((list) => list.length) || [];
-
-      let entries = externalEntries;
-      let source: 'external' | 'default' = entries.length ? 'external' : 'default';
-
-      if (!entries.length) {
-        const data = await jget(apiUrl({ action: 'get_short_epg', stream_id: String(streamId), limit: '2' })) as Record<string, unknown>;
-        if (requestId !== epgRequestRef.current) return;
-
-        const list: unknown[] = (data?.epg_listings || data?.Epg_listings || data?.listings || []) as unknown[];
-        entries = (list as Record<string, unknown>[])
-          .map((e) => {
-            const start = parseEpgTs(e.start_timestamp ?? e.start ?? e.start_ts ?? e.begin ?? e.from);
-            const end = parseEpgTs(e.stop_timestamp ?? e.end_timestamp ?? e.end ?? e.stop ?? e.to);
-            return {
-              title: decodePossiblyBase64Utf8(e.title ?? e.name ?? e.programme_title ?? ''),
-              start,
-              end,
-            };
-          })
-          .filter((e) => e.start > 0 && e.end > e.start)
-          .sort((a, b) => a.start - b.start);
-      }
-
-      if (!entries.length) {
+      let activeSchedule = schedule;
+      let entries = schedule.programmes;
+      let refreshPending = false;
+      if (!entries.length || schedule.source === 'none') {
         setEpg(null);
         return;
       }
 
       const paint = () => {
         if (requestId !== epgRequestRef.current) return;
-        const nowSec = Date.now() / 1000;
-
-        let curIndex = entries.findIndex((e) => e.start <= nowSec && e.end > nowSec);
-        if (curIndex < 0) {
-          const firstFutureIndex = entries.findIndex((e) => e.start > nowSec);
-          curIndex = firstFutureIndex > 0 ? firstFutureIndex - 1 : entries.length - 1;
+        if (!entries.length || activeSchedule.source === 'none') {
+          setEpg(null);
+          return;
         }
 
-        const cur = entries[curIndex];
-        if (!cur) return;
+        // Refresh a long-running player's schedule in place. Do this before
+        // looking for the current programme so a schedule gap can recover too.
+        if (!refreshPending && Date.now() - activeSchedule.updatedAt >= EPG_TTL_MS) {
+          refreshPending = true;
+          void loadSchedule(channel, true)
+            .then((fresh) => {
+              if (requestId !== epgRequestRef.current) return;
+              activeSchedule = fresh;
+              entries = fresh.programmes;
+              paint();
+            })
+            .finally(() => { refreshPending = false; });
+        }
 
-        const next = entries[curIndex + 1] || null;
-        const dur = Math.max(1, cur.end - cur.start);
-        const progress = Math.min(100, Math.max(0, Math.round(((nowSec - cur.start) / dur) * 100)));
+        const nowSec = Date.now() / 1000;
+        const currentIndex = entries.findIndex((entry) => entry.start <= nowSec && entry.end > nowSec);
+        if (currentIndex < 0) {
+          setEpg(null);
+          return;
+        }
 
-        if (requestId !== epgRequestRef.current) return;
+        const current = entries[currentIndex];
+        if (!current) return;
+        const next = entries[currentIndex + 1] || null;
+        const duration = Math.max(1, current.end - current.start);
+        const progress = Math.min(100, Math.max(0, Math.round(((nowSec - current.start) / duration) * 100)));
+        const epgSource: Exclude<EpgSource, 'none'> = activeSchedule.source;
 
         setEpg({
-          nowTitle: cur.title,
-          nowTime: `${fmtTime(cur.start)} – ${fmtTime(cur.end)}`,
+          nowTitle: current.title,
+          nowTime: `${fmtTime(current.start)} – ${fmtTime(current.end)}`,
           progress,
           next: next ? `Next  ${fmtTime(next.start)}  ${next.title}` : '',
-          source,
+          source: epgSource,
         });
 
-        if (!next && nowSec >= cur.end - 10 && requestId === epgRequestRef.current) {
-          void fetchEpg(streamId, epgChannelId, channelName);
-        }
       };
 
       paint();
-      epgIntervalRef.current = setInterval(paint, 30000);
+      epgIntervalRef.current = setInterval(paint, 30_000);
     } catch {
       if (requestId !== epgRequestRef.current) return;
       stopEpgRefresh();
       setEpg(null);
     }
-  }, [apiUrl, jget, loadExternalEpg, normalizeChannelKey, stopEpgRefresh]);
+  }, [loadSchedule, stopEpgRefresh]);
 
-  React.useEffect(() => {
-    return () => {
-      if (epgIntervalRef.current) clearInterval(epgIntervalRef.current);
-    };
-  }, []);
+  React.useEffect(() => () => stopEpgRefresh(), [stopEpgRefresh]);
 
-  return { epg, fetchEpg, clearEpg, stopEpgRefresh };
+  return { epg, fetchEpg, clearEpg, stopEpgRefresh, loadSchedule };
 }

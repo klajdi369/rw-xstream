@@ -1,5 +1,6 @@
 import React from 'react';
 import { Hud } from './components/Hud';
+import { EpgGuide } from './components/EpgGuide';
 import { OrderPrompt } from './components/OrderPrompt';
 import { SettingsOverlay } from './components/SettingsOverlay';
 import { Sidebar } from './components/Sidebar';
@@ -11,10 +12,12 @@ import { usePlayback } from './hooks/usePlayback';
 import { useProxyMemory } from './hooks/useProxyMemory';
 import { useToast } from './hooks/useToast';
 import { Category, Channel, LastChannel } from './types/player';
+import { isGuideToggle } from './epg/remote';
 import {
   CATEGORY_UNLOCK_PRESS_COUNT,
   CATEGORY_UNLOCK_WINDOW_MS,
   CHANNEL_ROW_JUMP,
+  DEFAULT_EPG_URL,
   HIDE_CATEGORIES,
   LAST_KEY,
   SAVE_KEY,
@@ -49,6 +52,7 @@ export default function App() {
   // ── Overlays ────────────────────────────────────────────────────────────────
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [epgGuideOpen, setEpgGuideOpen] = React.useState(false);
   const [focus, setFocus] = React.useState<'categories' | 'channels'>('channels');
 
   // ── Connection credentials ───────────────────────────────────────────────────
@@ -56,6 +60,9 @@ export default function App() {
   const [user, setUser] = React.useState(saved.user ? String(saved.user) : '2ac2f1121896');
   const [pass, setPass] = React.useState(saved.pass ? String(saved.pass) : '6b68a4da31');
   const [fmt, setFmt] = React.useState(saved.fmt ? String(saved.fmt) : 'm3u8');
+  const [epgUrl, setEpgUrl] = React.useState(
+    Object.prototype.hasOwnProperty.call(saved, 'epgUrl') ? String(saved.epgUrl ?? '') : DEFAULT_EPG_URL,
+  );
   const [remember, setRemember] = React.useState(saved.rememberChannel !== false);
   const [useProxy, setUseProxy] = React.useState(saved.useProxy !== false);
   const [rememberProxyMode, setRememberProxyMode] = React.useState(saved.rememberProxyMode !== false);
@@ -159,10 +166,11 @@ export default function App() {
   }, []);
 
   // ── EPG ───────────────────────────────────────────────────────────────────────
-  const { epg, fetchEpg, clearEpg, stopEpgRefresh } = useEpg({
+  const { epg, fetchEpg, clearEpg, stopEpgRefresh, loadSchedule } = useEpg({
     apiUrl,
     jget,
     backendBaseUrl: backendBaseRef.current,
+    epgUrl,
   });
 
   // ── Playback ──────────────────────────────────────────────────────────────────
@@ -196,6 +204,13 @@ export default function App() {
     () => sortWithCustomOrder(channels, activeCatRef.current || '', customOrderInList),
     [channels, customOrderInList, sortWithCustomOrder],
   );
+
+  // Search filters the sidebar, but the guide should always cover the complete
+  // active category. The category cache retains that unfiltered source list.
+  const guideChannels = React.useMemo(() => {
+    const complete = cacheRef.current.get(activeCatRef.current || '') || channels;
+    return sortWithCustomOrder(complete, activeCatRef.current || '', customOrderInList);
+  }, [channels, customOrderInList, sortWithCustomOrder]);
 
   // ── Load a category ───────────────────────────────────────────────────────────
   const loadCategory = React.useCallback(async (cat: Category, resetSel = true) => {
@@ -268,7 +283,7 @@ export default function App() {
       cacheRef.current.clear();
 
       localStorage.setItem(SAVE_KEY, JSON.stringify({
-        server, user, pass, fmt,
+        server, user, pass, fmt, epgUrl,
         rememberChannel: remember,
         useProxy,
         rememberProxyMode,
@@ -320,7 +335,7 @@ export default function App() {
       setConnecting(false);
       setConnectProgress(0);
     }
-  }, [apiUrl, fmt, jget, loadCategory, pass, playChannel, remember, rememberProxyMode, server, setHudSub, setHudTitle, showAllCategories, useProxy, user, wakeHud]);
+  }, [apiUrl, epgUrl, fmt, jget, loadCategory, pass, playChannel, remember, rememberProxyMode, server, setHudSub, setHudTitle, showAllCategories, useProxy, user, wakeHud]);
 
   // ── Init from localStorage ────────────────────────────────────────────────────
   React.useEffect(() => {
@@ -395,6 +410,22 @@ export default function App() {
     cancelPendingTune();
     playChannel(ch);
   }, [cancelPendingTune, playChannel]);
+
+  // The guide can tune a channel that is outside the currently filtered
+  // sidebar. Restore the complete list and move the shared cursor to the tuned
+  // channel so the next Arrow press and the next guide opening start there.
+  const playFromGuide = React.useCallback((ch: Channel | undefined) => {
+    if (!ch) return;
+    const channelIndex = guideChannels.findIndex((candidate) => (
+      String(candidate.stream_id) === String(ch.stream_id)
+    ));
+    const completeList = cacheRef.current.get(activeCatRef.current || '');
+
+    setChQuery('');
+    if (completeList) setChannels(completeList);
+    if (channelIndex >= 0) setSelCh(channelIndex);
+    playNow(ch);
+  }, [guideChannels, playNow]);
 
   // Arrow keys pressed while a sidebar search field is focused. The field blurs
   // itself first; here we just apply the resulting navigation so you can leave
@@ -507,6 +538,19 @@ export default function App() {
       // The SettingsOverlay owns its own keyboard navigation while open; the
       // live handler just stays out of the way.
       if (settingsOpen) return;
+
+      // The full guide owns arrows, OK, page/channel keys, and its close key.
+      // Its component handles those controls while this global player handler
+      // stays idle, preventing a guide move from also tuning the background.
+      if (epgGuideOpen) return;
+
+      // Green / Guide opens the full schedule from either the player or list.
+      if (isGuideToggle(e)) {
+        e.preventDefault();
+        setSidebarOpen(false);
+        setEpgGuideOpen(true);
+        return;
+      }
 
       // ── Open Settings (works while watching or in the list) ──
       // The HUD's Settings button needs a pointer; a TV remote has none, so map
@@ -710,7 +754,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [
     categories, channelList, channelOrderMap, channels, connect,
-    customOrderInList, executeZap, focus, loadCategory, moveByChannelRow,
+    customOrderInList, epgGuideOpen, executeZap, focus, loadCategory, moveByChannelRow,
     orderPromptDigits, orderPromptError, orderPromptOpen, orderPromptReplaceOnDigit,
     orderPromptTarget, playNow, playingId, selCat, selCh, settingsOpen,
     showAllCategories, showKeyIndicator, showToast, sidebarOpen, wakeHud,
@@ -778,11 +822,23 @@ export default function App() {
         error={orderPromptError}
       />
 
+      <EpgGuide
+        open={epgGuideOpen}
+        channels={guideChannels}
+        playingId={playingId}
+        initialChannelId={channelList[selCh]?.stream_id != null ? String(channelList[selCh].stream_id) : playingId}
+        categoryName={activeCatName}
+        loadSchedule={loadSchedule}
+        onTune={playFromGuide}
+        onClose={() => setEpgGuideOpen(false)}
+      />
+
       <Hud
         title={hudTitle}
         subtitle={hudSub}
-        hidden={hudHidden || settingsOpen}
+        hidden={hudHidden || settingsOpen || epgGuideOpen}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenGuide={() => { setSidebarOpen(false); setEpgGuideOpen(true); }}
         keyIndicator={keyIndicator}
         epg={epg}
       />
@@ -793,6 +849,7 @@ export default function App() {
         user={user}
         pass={pass}
         fmt={fmt}
+        epgUrl={epgUrl}
         remember={remember}
         useProxy={useProxy}
         rememberProxyMode={rememberProxyMode}
@@ -804,6 +861,7 @@ export default function App() {
           if (patch.user !== undefined) setUser(patch.user);
           if (patch.pass !== undefined) setPass(patch.pass);
           if (patch.fmt !== undefined) setFmt(patch.fmt);
+          if (patch.epgUrl !== undefined) setEpgUrl(patch.epgUrl);
           if (patch.remember !== undefined) setRemember(patch.remember);
           if (patch.useProxy !== undefined) setUseProxy(patch.useProxy);
           if (patch.rememberProxyMode !== undefined) setRememberProxyMode(patch.rememberProxyMode);

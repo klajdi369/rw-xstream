@@ -7,6 +7,7 @@ type Props = {
   user: string;
   pass: string;
   fmt: string;
+  epgUrl: string;
   remember: boolean;
   useProxy: boolean;
   rememberProxyMode: boolean;
@@ -22,11 +23,11 @@ type Props = {
 // The panel is one linear list of focusable rows so it can be driven entirely
 // by a remote: ↑/↓ move the highlight, OK edits a field / flips a toggle /
 // presses a button, Back closes.
-const ITEM_COUNT = 9; // server, fmt, user, pass, + 3 toggles, + Connect, Clear
+const ITEM_COUNT = 10; // server, fmt, user, pass, EPG, + 3 toggles, + Connect, Clear
 
 export function SettingsOverlay(props: Props) {
   const {
-    open, server, user, pass, fmt, remember, useProxy, rememberProxyMode,
+    open, server, user, pass, fmt, epgUrl, remember, useProxy, rememberProxyMode,
     message, isError, progress, onChange, onConnect, onClear, onClose,
   } = props;
 
@@ -44,14 +45,14 @@ export function SettingsOverlay(props: Props) {
 
   const activate = React.useCallback((i: number) => {
     switch (i) {
-      case 0: case 1: case 2: case 3:
+      case 0: case 1: case 2: case 3: case 4:
         inputRefs.current[i]?.focus();
         break;
-      case 4: onChange({ remember: !remember }); break;
-      case 5: onChange({ useProxy: !useProxy }); break;
-      case 6: onChange({ rememberProxyMode: !rememberProxyMode }); break;
-      case 7: onConnect(); break;
-      case 8: onClear(); break;
+      case 5: onChange({ remember: !remember }); break;
+      case 6: onChange({ useProxy: !useProxy }); break;
+      case 7: onChange({ rememberProxyMode: !rememberProxyMode }); break;
+      case 8: onConnect(); break;
+      case 9: onClear(); break;
     }
   }, [onChange, onConnect, onClear, remember, useProxy, rememberProxyMode]);
 
@@ -108,7 +109,12 @@ export function SettingsOverlay(props: Props) {
           </div>
         </div>
 
-        <div className={`toggleRow ${selClass(4)}`} data-sel={4} onClick={() => { setSel(4); onChange({ remember: !remember }); }}>
+        <div className={`field ${selClass(4)}`} data-sel={4}>
+          <label>XMLTV guide URL <span className="fieldHint">Leave blank to use provider EPG only</span></label>
+          <input ref={setRef(4)} value={epgUrl} onKeyDown={(e) => fieldKey(e, 4)} onChange={(e) => onChange({ epgUrl: e.target.value })} placeholder="https://example.com/guide.xml" />
+        </div>
+
+        <div className={`toggleRow ${selClass(5)}`} data-sel={5} onClick={() => { setSel(5); onChange({ remember: !remember }); }}>
           <div>
             <div className="tLabel">Remember last channel</div>
             <div className="tDesc">Resume the last watched channel on startup</div>
@@ -119,7 +125,7 @@ export function SettingsOverlay(props: Props) {
           </label>
         </div>
 
-        <div className={`toggleRow ${selClass(5)}`} data-sel={5} onClick={() => { setSel(5); onChange({ useProxy: !useProxy }); }}>
+        <div className={`toggleRow ${selClass(6)}`} data-sel={6} onClick={() => { setSel(6); onChange({ useProxy: !useProxy }); }}>
           <div>
             <div className="tLabel">Use local proxy + deinterlace</div>
             <div className="tDesc">Route through /proxy and ffmpeg for interlaced channels</div>
@@ -130,7 +136,7 @@ export function SettingsOverlay(props: Props) {
           </label>
         </div>
 
-        <div className={`toggleRow ${selClass(6)}`} data-sel={6} onClick={() => { setSel(6); onChange({ rememberProxyMode: !rememberProxyMode }); }}>
+        <div className={`toggleRow ${selClass(7)}`} data-sel={7} onClick={() => { setSel(7); onChange({ rememberProxyMode: !rememberProxyMode }); }}>
           <div>
             <div className="tLabel">Remember proxy mode per channel</div>
             <div className="tDesc">Reset after 6 successful loads or on complete playback failure</div>
@@ -145,8 +151,8 @@ export function SettingsOverlay(props: Props) {
         )}
         <div className="settActions">
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button className={`btn btnP ${selClass(7)}`} data-sel={7} onClick={onConnect}>Connect</button>
-            <button className={`btn btnD ${selClass(8)}`} data-sel={8} onClick={onClear}>Clear Saved</button>
+            <button className={`btn btnP ${selClass(8)}`} data-sel={8} onClick={onConnect}>Connect</button>
+            <button className={`btn btnD ${selClass(9)}`} data-sel={9} onClick={onClear}>Clear Saved</button>
           </div>
           {message && <div className={`msg ${isError ? 'err' : 'ok'}`}>{message}</div>}
         </div>

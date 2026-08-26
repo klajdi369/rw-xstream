@@ -8,3 +8,4 @@ export const CHANNEL_ROW_JUMP = 8;
 export const HIDE_CATEGORIES = true;
 export const CATEGORY_UNLOCK_PRESS_COUNT = 4;
 export const CATEGORY_UNLOCK_WINDOW_MS = 1400;
+export const DEFAULT_EPG_URL = 'https://www.open-epg.com/files/albania1.xml';

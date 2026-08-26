@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { send } from './utils.js';
 import { handleProxy, handleProxyTranscode } from './handlers/proxy.js';
+import { handleEpg } from './handlers/epg.js';
 import { serveStatic } from './handlers/static.js';
 
 // Default off Vite's dev port (3004) so a bare `node server/index.js` never
@@ -17,6 +18,11 @@ async function route(req, res, url) {
 
   if (url.pathname === '/proxy-transcode') {
     await handleProxyTranscode(res, url);
+    return;
+  }
+
+  if (url.pathname === '/epg') {
+    await handleEpg(res, url);
     return;
   }
 
