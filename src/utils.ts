@@ -2,6 +2,12 @@ export const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b
 
 export const cx = (...tokens: Array<string | false | null | undefined>) => tokens.filter(Boolean).join(' ');
 
+const timeFormatter = new Intl.DateTimeFormat([], {
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+
 export function normServer(s: string) {
   const t = (s || '').trim();
   if (!t) return '';
@@ -10,8 +16,7 @@ export function normServer(s: string) {
 }
 
 export function fmtTime(ts: number) {
-  const d = new Date(ts * 1000);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  return timeFormatter.format(new Date(ts * 1000));
 }
 
 export function decodePossiblyBase64Utf8(value: unknown): string {

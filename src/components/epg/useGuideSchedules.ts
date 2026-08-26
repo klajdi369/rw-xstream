@@ -5,6 +5,7 @@ import type { Channel } from '../../types/player';
 
 const LOAD_WORKERS = 3;
 const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+const SCHEDULE_COMMIT_INTERVAL_MS = 60;
 
 type Options = {
   open: boolean;
@@ -43,12 +44,37 @@ export function useGuideSchedules({ open, channels, priorityIndex, loadSchedule 
     const validKeys = new Set(channels.map(channelKey));
     let cursor = 0;
     let loaded = 0;
+    let pendingSchedules = new Map<string, EpgSchedule>();
+    let commitTimer: number | null = null;
 
     setSchedules((previous) => {
       if (force) return new Map();
       return new Map(Array.from(previous).filter(([key]) => validKeys.has(key)));
     });
     setLoadState({ loaded: 0, total: channels.length, loading: channels.length > 0 });
+
+    // A large category can finish hundreds of local/cache-backed requests in a
+    // burst. Commit them together so React does not clone a growing Map and
+    // repaint the guide once per channel while the user is navigating.
+    const commitPending = () => {
+      commitTimer = null;
+      if (cancelled || pendingSchedules.size === 0) return;
+      const batch = pendingSchedules;
+      pendingSchedules = new Map();
+      setSchedules((previous) => {
+        const next = new Map(previous);
+        batch.forEach((schedule, key) => next.set(key, schedule));
+        return next;
+      });
+      setLoadState({ loaded, total: channels.length, loading: loaded < channels.length });
+    };
+
+    const queueSchedule = (key: string, schedule: EpgSchedule) => {
+      pendingSchedules.set(key, schedule);
+      if (commitTimer === null) {
+        commitTimer = window.setTimeout(commitPending, SCHEDULE_COMMIT_INTERVAL_MS);
+      }
+    };
 
     const worker = async () => {
       while (!cancelled) {
@@ -70,9 +96,8 @@ export function useGuideSchedules({ open, channels, priorityIndex, loadSchedule 
         }
         if (cancelled) return;
 
-        setSchedules((previous) => new Map(previous).set(channelKey(channel), schedule));
         loaded += 1;
-        setLoadState({ loaded, total: channels.length, loading: loaded < channels.length });
+        queueSchedule(channelKey(channel), schedule);
       }
     };
 
@@ -81,11 +106,16 @@ export function useGuideSchedules({ open, channels, priorityIndex, loadSchedule 
       () => worker(),
     )).then(() => {
       if (cancelled) return;
+      if (commitTimer !== null) window.clearTimeout(commitTimer);
+      commitPending();
       setLoadState({ loaded, total: channels.length, loading: false });
       if (forceRequestRef.current === refreshRequest) forceRequestRef.current = null;
     });
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (commitTimer !== null) window.clearTimeout(commitTimer);
+    };
   }, [channels, loadSchedule, open, priorityIndex, refreshRequest]);
 
   React.useEffect(() => {

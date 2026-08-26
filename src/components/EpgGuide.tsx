@@ -46,6 +46,9 @@ export function EpgGuide({
     loadSchedule,
   });
   const navigation = useGuideNavigation({ open, channels, schedules, initialIndex });
+  const channelsWithData = React.useMemo(() => channels.filter((channel) => (
+    (schedules.get(channelKey(channel))?.programmes.length || 0) > 0
+  )).length, [channels, schedules]);
 
   // The guide is one remote-controlled focus surface. Moving focus here avoids
   // the browser activating whichever sidebar/HUD button happened to be focused
@@ -100,9 +103,6 @@ export function EpgGuide({
 
   if (!open) return null;
 
-  const channelsWithData = channels.filter((channel) => (
-    (schedules.get(channelKey(channel))?.programmes.length || 0) > 0
-  )).length;
   const activeDescendant = navigation.selectedProgramme
     ? `guide-programme-${navigation.selectedChannelIndex}-${navigation.selectedProgramme.start}`
     : `guide-channel-${navigation.selectedChannelIndex}`;

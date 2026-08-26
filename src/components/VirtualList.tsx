@@ -1,4 +1,5 @@
 import React from 'react';
+import { useVirtualWindow } from '../hooks/useVirtualWindow';
 
 type VirtualListProps<T> = {
   items: T[];
@@ -21,63 +22,26 @@ export function VirtualList<T>({
   render,
   classForIndex,
 }: VirtualListProps<T>) {
-  const ref = React.useRef<HTMLDivElement>(null);
-  const [scrollTop, setScrollTop] = React.useState(0);
-  const [height, setHeight] = React.useState(500);
-
-  React.useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-
-    const syncHeight = () => setHeight(el.clientHeight);
-    syncHeight();
-
-    const obs = new ResizeObserver(syncHeight);
-    obs.observe(el);
-
-    return () => obs.disconnect();
-  }, []);
-
-  React.useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el || items.length === 0 || !active) return;
-
-    const i = Math.max(0, Math.min(selectedIndex, items.length - 1));
-    const top = i * itemHeight;
-    const bottom = top + itemHeight;
-    const st = el.scrollTop;
-    const vh = el.clientHeight;
-
-    if (top < st) {
-      el.scrollTop = top;
-      setScrollTop(top);
-    } else if (bottom > st + vh) {
-      const nextTop = bottom - vh;
-      el.scrollTop = nextTop;
-      setScrollTop(nextTop);
-    }
-  }, [active, itemHeight, items.length, selectedIndex]);
-
-  // When the list shrinks (e.g. a search query), the browser clamps the real
-  // scrollTop but our state copy can stay stale-large — which would make
-  // `first` exceed `last` and render an empty (blank) window. Clamp the value
-  // we window with against the current content height so that can't happen.
-  const maxScroll = Math.max(0, items.length * itemHeight - height);
-  const clampedScrollTop = Math.min(scrollTop, maxScroll);
-
-  React.useEffect(() => {
-    if (scrollTop > maxScroll) setScrollTop(maxScroll);
-  }, [maxScroll, scrollTop]);
-
-  const first = Math.max(0, Math.floor(clampedScrollTop / itemHeight) - overscan);
-  const last = Math.min(items.length - 1, Math.ceil((clampedScrollTop + height) / itemHeight) + overscan);
+  const {
+    containerRef,
+    firstIndex,
+    lastIndex,
+    totalHeight,
+    onScroll,
+  } = useVirtualWindow({
+    itemCount: items.length,
+    selectedIndex,
+    itemHeight,
+    overscan,
+    active,
+  });
 
   return (
-    <div className="vScroll" ref={ref} onScroll={(e) => setScrollTop((e.target as HTMLDivElement).scrollTop)}>
-      <div className="vSpacer" style={{ height: `${items.length * itemHeight}px` }} />
+    <div className="vScroll" ref={containerRef} onScroll={onScroll}>
+      <div className="vSpacer" style={{ height: `${totalHeight}px` }} />
       <div className="vWindow">
-        {items.slice(first, last + 1).map((item, idx) => {
-          const i = first + idx;
+        {items.slice(firstIndex, lastIndex + 1).map((item, idx) => {
+          const i = firstIndex + idx;
           const extra = classForIndex?.(item, i) ?? '';
           return (
             <div

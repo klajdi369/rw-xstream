@@ -811,7 +811,7 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   transition: background .12s ease;
 }
 
-.guideRow:nth-child(even) { background: rgba(255, 255, 255, .018); }
+.guideRow.even { background: rgba(255, 255, 255, .018); }
 .guideRow:hover { background: rgba(255, 255, 255, .035); }
 .guideRow.selectedChannel { background: rgba(58, 160, 255, .055); }
 
@@ -1127,7 +1127,6 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   .guideDateButton { height: 42px !important; }
   .guideTimelineHeader { height: 42px; flex-basis: 42px; }
   .guideTimes > div { padding-top: 12px; }
-  .guideRow { height: 64px; }
   .guideDetails { min-height: 92px; padding-top: 10px; padding-bottom: 10px; }
   .guideDescription { -webkit-line-clamp: 1; }
   .guideRemoteHelp { display: none; }
