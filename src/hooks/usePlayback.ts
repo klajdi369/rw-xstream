@@ -245,19 +245,19 @@ export function usePlayback({
         }
       };
 
-      const fallback = () => {
+      const fallback = (reason?: string) => {
         if (settled || playToken !== playTokenRef.current) return;
         settled = true;
         clearBlackGuard();
 
         if (attempts[index + 1]) {
-          console.warn('[Player] fallback', { modeLabel, next: index + 1 });
+          console.warn('[Player] fallback', { modeLabel, next: index + 1, reason });
           setHudSub(`${modeLabel} failed — retrying…`);
           wakeHud();
           setTimeout(() => { void startAttempt(index + 1); }, 200);
         } else {
           resetRememberedPlaybackMode();
-          setHudSub('Cannot play this stream');
+          setHudSub(reason ? `Cannot play this stream — ${reason}` : 'Cannot play this stream');
           setBuffering(false);
           wakeHud();
         }
@@ -311,11 +311,35 @@ export function usePlayback({
         });
         let nonFatalHlsErrorScore = 0;
         const hlsStartedAt = Date.now();
-        hls.on(Hls.Events.ERROR, (_: unknown, d: { fatal?: boolean; type?: string; details?: string }) => {
+        hls.on(Hls.Events.ERROR, (_: unknown, d: {
+          fatal?: boolean;
+          type?: string;
+          details?: string;
+          response?: { code?: number };
+          frag?: { url?: string };
+        }) => {
           if (playToken !== playTokenRef.current) return;
           console.warn('[HLS][error]', d?.type, d?.details, d?.fatal);
           if (d?.fatal) {
             fallback();
+            return;
+          }
+          const isDirectHlsAttempt = !attempt.viaProxy && !attempt.viaTranscode;
+          // A segment that fails with status 0 on a direct attempt was blocked
+          // by the browser (almost always CORS: the playlist host allows us but
+          // the segment host doesn't). hls.js treats it as retryable and would
+          // keep hammering it until the black-screen guard gives up, but no
+          // retry can succeed from the browser — go to the proxy path now.
+          // Providers commonly do this when they swap in a placeholder segment
+          // (e.g. `/video/black.ts`) for a channel that's offline or an account
+          // that's over its connection limit.
+          if (isDirectHlsAttempt && d?.details === 'fragLoadError' && d?.response?.code === 0) {
+            const fragUrl = d?.frag?.url || '';
+            const placeholder = /\/black\.ts(\?|$)/i.test(fragUrl);
+            console.warn('[HLS] segment blocked by browser (CORS) — skipping direct HLS', { fragUrl, placeholder });
+            fallback(placeholder
+              ? 'provider sent an offline placeholder'
+              : (useProxy ? 'segments blocked (CORS)' : 'segments blocked (CORS) — enable the proxy in Settings'));
             return;
           }
           const suspiciousDetails = new Set([
@@ -325,7 +349,6 @@ export function usePlayback({
             'manifestIncompatibleCodecsError',
             'fragDecryptError',
           ]);
-          const isDirectHlsAttempt = !attempt.viaProxy && !attempt.viaTranscode;
           if (isDirectHlsAttempt && suspiciousDetails.has(String(d?.details || ''))) {
             nonFatalHlsErrorScore += 1;
             const elapsedMs = Date.now() - hlsStartedAt;
