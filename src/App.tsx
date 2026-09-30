@@ -185,7 +185,6 @@ export default function App() {
     useProxy,
     rememberProxyMode,
     remember,
-    channels,
     fetchEpg,
     clearEpg,
     stopEpgRefresh,
