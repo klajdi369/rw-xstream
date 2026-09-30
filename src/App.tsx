@@ -19,6 +19,7 @@ import {
   CHANNEL_ROW_JUMP,
   DEFAULT_EPG_URL,
   HIDE_CATEGORIES,
+  LAST_CAT_KEY,
   LAST_KEY,
   SAVE_KEY,
 } from './constants';
@@ -185,7 +186,6 @@ export default function App() {
     useProxy,
     rememberProxyMode,
     remember,
-    channels,
     fetchEpg,
     clearEpg,
     stopEpgRefresh,
@@ -247,6 +247,12 @@ export default function App() {
     wakeHud();
   }, [apiUrl, chQuery, jget, setHudSub, setHudTitle, wakeHud]);
 
+  // Remember the category the user explicitly picked, so the next startup opens
+  // it — even while the category list itself stays hidden (HIDE_CATEGORIES).
+  const rememberCategory = React.useCallback((cat: Category) => {
+    try { localStorage.setItem(LAST_CAT_KEY, String(cat.category_id)); } catch { /* storage unavailable */ }
+  }, []);
+
   // ── Connect ───────────────────────────────────────────────────────────────────
   const connect = React.useCallback(async () => {
     if (!server || !user || !pass) {
@@ -293,26 +299,33 @@ export default function App() {
       setConnectProgress(70);
       setSettingsProgress(70);
 
-      if (scopedCategories[0]) await loadCategory(scopedCategories[0], true);
+      const last: LastChannel | null = JSON.parse(localStorage.getItem(LAST_KEY) || 'null');
+
+      // Start in the last category the user picked (falling back to the last
+      // watched channel's category), looked up among *all* categories so a
+      // category reached by unlocking the list is still restored. The list
+      // itself stays hidden on startup — only its channels are shown.
+      const rememberedCatId = remember ? (localStorage.getItem(LAST_CAT_KEY) || last?.catId || '') : '';
+      const startCat = filtered.find((c) => String(c.category_id) === String(rememberedCatId)) || scopedCategories[0];
+      if (startCat) await loadCategory(startCat, true);
 
       setConnectProgress(90);
       setSettingsProgress(90);
 
-      const last: LastChannel | null = JSON.parse(localStorage.getItem(LAST_KEY) || 'null');
-      if (last && remember) {
-        const cat = scopedCategories.find((c) => String(c.category_id) === String(last.catId)) || scopedCategories[0];
-        if (cat) {
-          await loadCategory(cat, false);
-          const list = cacheRef.current.get(String(cat.category_id)) || [];
-          const idx = list.findIndex((c) => String(c.stream_id) === String(last.streamId));
-          const catIdx = scopedCategories.findIndex((c) => String(c.category_id) === String(cat.category_id));
-          setSelCat(catIdx >= 0 ? catIdx : 0);
-          if (idx >= 0) {
-            setSelCh(idx);
-            playChannel(list[idx]);
-            setResumeLabel(`▶ Resuming: ${last.name}`);
-            setTimeout(() => setResumeLabel(''), 3200);
-          }
+      if (startCat) {
+        const visibleCats = HIDE_CATEGORIES && !showAllCategories ? scopedCategories : filtered;
+        const catIdx = visibleCats.findIndex((c) => String(c.category_id) === String(startCat.category_id));
+        setSelCat(catIdx >= 0 ? catIdx : 0);
+      }
+
+      if (last && remember && startCat) {
+        const list = cacheRef.current.get(String(startCat.category_id)) || [];
+        const idx = list.findIndex((c) => String(c.stream_id) === String(last.streamId));
+        if (idx >= 0) {
+          setSelCh(idx);
+          playChannel(list[idx]);
+          setResumeLabel(`▶ Resuming: ${last.name}`);
+          setTimeout(() => setResumeLabel(''), 3200);
         }
       }
 
@@ -372,12 +385,15 @@ export default function App() {
     const q = catQuery.trim().toLowerCase();
     const filtered = q ? allCategories.filter((c) => String(c.category_name || '').toLowerCase().includes(q)) : allCategories;
     setCategories(filtered);
-    setSelCat(0);
+    const activeIdx = filtered.findIndex((c) => String(c.category_id) === activeCatRef.current);
+    setSelCat(activeIdx >= 0 ? activeIdx : 0);
   }, [allCategories, catQuery, showAllCategories]);
 
   // ── Channel filter on query change ────────────────────────────────────────────
   React.useEffect(() => {
-    const cat = categories[selCat];
+    // Use the active category rather than categories[selCat]: while the list is
+    // hidden `categories` only holds the first one, which may not be active.
+    const cat = allCategories.find((c) => String(c.category_id) === activeCatRef.current) || categories[selCat];
     if (!cat) return;
     loadCategory(cat, false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -741,7 +757,10 @@ export default function App() {
         e.preventDefault();
         if (focus === 'categories') {
           const cat = categories[selCat];
-          if (cat) loadCategory(cat, true);
+          if (cat) {
+            rememberCategory(cat);
+            loadCategory(cat, true);
+          }
           setFocus('channels');
         } else if (channelList[selCh]) {
           playNow(channelList[selCh]);
@@ -754,7 +773,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [
     categories, channelList, channelOrderMap, channels, connect,
-    customOrderInList, epgGuideOpen, executeZap, focus, loadCategory, moveByChannelRow,
+    customOrderInList, epgGuideOpen, executeZap, focus, loadCategory, moveByChannelRow, rememberCategory,
     orderPromptDigits, orderPromptError, orderPromptOpen, orderPromptReplaceOnDigit,
     orderPromptTarget, playNow, playingId, selCat, selCh, settingsOpen,
     showAllCategories, showKeyIndicator, showToast, sidebarOpen, wakeHud,
@@ -803,7 +822,10 @@ export default function App() {
           if (HIDE_CATEGORIES && !showAllCategories) return;
           setSelCat(i);
           const cat = categories[i];
-          if (cat) await loadCategory(cat, true);
+          if (cat) {
+            rememberCategory(cat);
+            await loadCategory(cat, true);
+          }
           setFocus('channels');
         }}
         onPickChannel={(i) => {
@@ -871,6 +893,7 @@ export default function App() {
         onClear={() => {
           localStorage.removeItem(SAVE_KEY);
           localStorage.removeItem(LAST_KEY);
+          localStorage.removeItem(LAST_CAT_KEY);
           setMsg('Cleared');
           setMsgIsError(false);
           setSettingsProgress(0);

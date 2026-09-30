@@ -26,7 +26,6 @@ interface UsePlaybackOptions {
   useProxy: boolean;
   rememberProxyMode: boolean;
   remember: boolean;
-  channels: Channel[];
   fetchEpg: (id: string | number, epgChannelId?: string | null, channelName?: string) => Promise<void>;
   clearEpg: () => void;
   stopEpgRefresh: () => void;
@@ -48,7 +47,6 @@ export function usePlayback({
   useProxy,
   rememberProxyMode,
   remember,
-  channels,
   fetchEpg,
   clearEpg,
   stopEpgRefresh,
@@ -61,8 +59,6 @@ export function usePlayback({
   const hlsRef = React.useRef<Hls | null>(null);
   const mtsRef = React.useRef<ReturnType<typeof mpegts.createPlayer> | null>(null);
   const playTokenRef = React.useRef(0);
-  const preloadAbortRef = React.useRef<Map<string, AbortController>>(new Map());
-  const preloadStampRef = React.useRef<Map<string, number>>(new Map());
 
   const [playingId, setPlayingId] = React.useState<string | null>(null);
   const [buffering, setBuffering] = React.useState(false);
@@ -80,61 +76,6 @@ export function usePlayback({
       videoRef.current.load();
     }
   }, [clearEpg, stopEpgRefresh, videoRef]);
-
-  const preloadNearbyChannels = React.useCallback((list: Channel[], centerIndex: number) => {
-    if (!list.length || !server || !user || !pass) return;
-
-    const sourceFormat: StreamFormat = fmt === 'ts' ? 'ts' : 'm3u8';
-
-    // Warming a `.ts` URL opens a *real* live stream connection, and most Xtream
-    // accounts cap concurrent connections (often to 1). Warming several neighbours
-    // that way was saturating the account and making the provider answer the
-    // actual tune with 403 — the very failures the retry logic then fought. Only
-    // prime the lightweight `.m3u8` manifest (a small request that doesn't hold a
-    // stream open), and only the immediate previous/next channel.
-    if (sourceFormat !== 'm3u8') return;
-
-    const now = Date.now();
-    const indices = [centerIndex - 1, centerIndex + 1]
-      .filter((i) => i >= 0 && i < list.length && i !== centerIndex);
-
-    for (const idx of indices) {
-      const ch = list[idx];
-      if (!ch) continue;
-      const key = `${ch.stream_id}:${sourceFormat}`;
-      const last = preloadStampRef.current.get(key) || 0;
-      if (now - last < 20000) continue;
-      preloadStampRef.current.set(key, now);
-
-      const prev = preloadAbortRef.current.get(key);
-      if (prev) prev.abort();
-
-      const directUrl = `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${sourceFormat}`;
-      const warmUrl = useProxy
-        ? `${backendBaseRef.current}/proxy?url=${encodeURIComponent(directUrl)}&deint=0`
-        : directUrl;
-
-      const ctl = new AbortController();
-      preloadAbortRef.current.set(key, ctl);
-      window.setTimeout(() => ctl.abort(), 1800);
-
-      fetch(warmUrl, {
-        method: 'GET',
-        cache: 'no-store',
-        // The proxy lives on a different origin in dev (:3005) and sends
-        // Access-Control-Allow-Origin, so it must be a CORS request — a
-        // 'same-origin' request would throw before ever hitting the network.
-        mode: useProxy ? 'cors' : 'no-cors',
-        signal: ctl.signal,
-      }).catch(() => {
-        // best-effort warmup only
-      }).finally(() => {
-        if (preloadAbortRef.current.get(key) === ctl) {
-          preloadAbortRef.current.delete(key);
-        }
-      });
-    }
-  }, [backendBaseRef, fmt, pass, server, useProxy, user]);
 
   const playChannel = React.useCallback((ch: Channel, forceFmt?: StreamFormat) => {
     const v = videoRef.current;
@@ -197,9 +138,6 @@ export function usePlayback({
     setHudTitle(ch.name || 'Playing');
     void fetchEpg(ch.stream_id, ch.epg_channel_id, ch.name);
 
-    const currentIndex = channels.findIndex((c) => String(c.stream_id) === String(ch.stream_id));
-    if (currentIndex >= 0) preloadNearbyChannels(channels, currentIndex);
-
     const startAttempt = async (index: number) => {
       if (playToken !== playTokenRef.current) return;
       const attempt = attempts[index];
@@ -245,6 +183,17 @@ export function usePlayback({
         }
       };
 
+      // Stop trying altogether: tear the player down so hls.js doesn't keep
+      // retrying segments (and holding the provider connection) in the
+      // background, and tell the user why.
+      const giveUp = (reason?: string) => {
+        stopPlayback(true);
+        resetRememberedPlaybackMode();
+        setHudSub(reason ? `Cannot play this stream — ${reason}` : 'Cannot play this stream');
+        setBuffering(false);
+        wakeHud();
+      };
+
       const fallback = (reason?: string) => {
         if (settled || playToken !== playTokenRef.current) return;
         settled = true;
@@ -256,10 +205,7 @@ export function usePlayback({
           wakeHud();
           setTimeout(() => { void startAttempt(index + 1); }, 200);
         } else {
-          resetRememberedPlaybackMode();
-          setHudSub(reason ? `Cannot play this stream — ${reason}` : 'Cannot play this stream');
-          setBuffering(false);
-          wakeHud();
+          giveUp(reason);
         }
       };
 
@@ -303,8 +249,27 @@ export function usePlayback({
       if (attempt.playAs === 'm3u8' && Hls.isSupported()) {
         const hls = new Hls({ lowLatencyMode: true, maxBufferLength: 10, maxMaxBufferLength: 30 });
         hlsRef.current = hls;
+        // Xtream panels answer an offline channel with a normal-looking
+        // playlist whose only segment is a placeholder clip (`/video/black.ts`).
+        // No fallback can do better — the proxy or FFmpeg would just play the
+        // black clip and report it as "Live" — so say it's offline and stop.
+        hls.on(Hls.Events.LEVEL_LOADED, (_: unknown, data: { details?: { fragments?: { url?: string }[] } }) => {
+          if (settled || playToken !== playTokenRef.current) return;
+          const frags = data?.details?.fragments || [];
+          const isPlaceholder = (u = '') => {
+            let decoded = u;
+            try { decoded = decodeURIComponent(u); } catch { /* keep raw */ }
+            return /\/video\/black\.ts(\?|&|$)/i.test(decoded);
+          };
+          if (frags.length && frags.every((f) => isPlaceholder(f.url))) {
+            console.warn('[HLS] provider returned its offline placeholder', { url: frags[0]?.url });
+            settled = true;
+            clearBlackGuard();
+            giveUp('channel is offline (provider placeholder)');
+          }
+        });
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          if (playToken !== playTokenRef.current) return;
+          if (settled || playToken !== playTokenRef.current) return;
           setHudSub(`▶ Live (${modeLabel})`);
           v.play().catch(() => fallback());
           armBlackGuard();
@@ -330,16 +295,9 @@ export function usePlayback({
           // the segment host doesn't). hls.js treats it as retryable and would
           // keep hammering it until the black-screen guard gives up, but no
           // retry can succeed from the browser — go to the proxy path now.
-          // Providers commonly do this when they swap in a placeholder segment
-          // (e.g. `/video/black.ts`) for a channel that's offline or an account
-          // that's over its connection limit.
           if (isDirectHlsAttempt && d?.details === 'fragLoadError' && d?.response?.code === 0) {
-            const fragUrl = d?.frag?.url || '';
-            const placeholder = /\/black\.ts(\?|$)/i.test(fragUrl);
-            console.warn('[HLS] segment blocked by browser (CORS) — skipping direct HLS', { fragUrl, placeholder });
-            fallback(placeholder
-              ? 'provider sent an offline placeholder'
-              : (useProxy ? 'segments blocked (CORS)' : 'segments blocked (CORS) — enable the proxy in Settings'));
+            console.warn('[HLS] segment blocked by browser (CORS) — skipping direct HLS', { fragUrl: d?.frag?.url });
+            fallback(useProxy ? 'segments blocked (CORS)' : 'segments blocked (CORS) — enable the proxy in Settings');
             return;
           }
           const suspiciousDetails = new Set([
@@ -401,11 +359,9 @@ export function usePlayback({
   }, [
     activeCatRef,
     backendBaseRef,
-    channels,
     fetchEpg,
     fmt,
     pass,
-    preloadNearbyChannels,
     readChannelProxyMemory,
     remember,
     rememberProxyMode,
@@ -419,13 +375,6 @@ export function usePlayback({
     wakeHud,
     writeChannelProxyMemory,
   ]);
-
-  React.useEffect(() => {
-    return () => {
-      preloadAbortRef.current.forEach((ctl) => ctl.abort());
-      preloadAbortRef.current.clear();
-    };
-  }, []);
 
   return { playingId, buffering, playChannel, stopPlayback };
 }

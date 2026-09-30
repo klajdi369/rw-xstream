@@ -117,7 +117,7 @@ export function SettingsOverlay(props: Props) {
         <div className={`toggleRow ${selClass(5)}`} data-sel={5} onClick={() => { setSel(5); onChange({ remember: !remember }); }}>
           <div>
             <div className="tLabel">Remember last channel</div>
-            <div className="tDesc">Resume the last watched channel on startup</div>
+            <div className="tDesc">Resume the last watched channel and category on startup</div>
           </div>
           <label className="toggle" onClick={(e) => e.stopPropagation()}>
             <input type="checkbox" checked={remember} onChange={(e) => onChange({ remember: e.target.checked })} />

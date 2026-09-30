@@ -21,7 +21,7 @@ export function passthroughHeaders(headers) {
   return out;
 }
 
-export function rewritePlaylist(body, sourceUrl, host, cookie = '') {
+export function rewritePlaylist(body, sourceUrl, host, cookie = '', deint = true) {
   const base = new URL(sourceUrl);
   return body
     .split('\n')
@@ -32,7 +32,7 @@ export function rewritePlaylist(body, sourceUrl, host, cookie = '') {
       try {
         const absolute = new URL(trimmed, base).toString();
         const cookieQ = cookie ? `&cookie=${encodeURIComponent(cookie)}` : '';
-        return `/proxy?url=${encodeURIComponent(absolute)}&deint=1&host=${encodeURIComponent(host)}${cookieQ}`;
+        return `/proxy?url=${encodeURIComponent(absolute)}&deint=${deint ? 1 : 0}&host=${encodeURIComponent(host)}${cookieQ}`;
       } catch {
         return line;
       }
