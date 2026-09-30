@@ -1,5 +1,6 @@
 export const SAVE_KEY = 'xtream_tv_v4';
 export const LAST_KEY = 'xtream_last_ch';
+export const LAST_CAT_KEY = 'xtream_last_cat';
 export const CHANNEL_PROXY_MEMORY_KEY = 'xtream_channel_proxy_memory_v1';
 export const CHANNEL_ORDER_KEY = 'xtream_channel_custom_order_v1';
 export const CHANNEL_ORDER_MODE_KEY = 'xtream_channel_order_mode_v1';
