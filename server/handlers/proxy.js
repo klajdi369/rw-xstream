@@ -66,7 +66,10 @@ export async function handleProxy(req, res, url, PORT) {
 
     if (isPlaylist) {
       const text = await upstream.text();
-      const rewritten = rewritePlaylist(text, targetUrl.toString(), host, stickyCookie);
+      // Resolve relative segment paths against where the playlist actually
+      // came from: Xtream panels redirect /live/…m3u8 to a tokenised /hls/…
+      // URL, and the segments are relative to that, not to the original.
+      const rewritten = rewritePlaylist(text, upstream.url || targetUrl.toString(), host, stickyCookie, deint);
       console.log(`[PROXY] playlist ok ${targetUrl} cookie=${stickyCookie ? 'yes' : 'no'}`);
       res.writeHead(200, {
         'Content-Type': 'application/x-mpegURL',
