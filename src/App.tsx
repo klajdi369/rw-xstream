@@ -60,12 +60,12 @@ export default function App() {
   const [server, setServer] = React.useState(saved.server ? String(saved.server) : '');
   const [user, setUser] = React.useState(saved.user ? String(saved.user) : '');
   const [pass, setPass] = React.useState(saved.pass ? String(saved.pass) : '');
-  const [fmt, setFmt] = React.useState(saved.fmt ? String(saved.fmt) : 'm3u8');
+  const [fmt, setFmt] = React.useState(saved.fmt ? String(saved.fmt) : 'ts');
   const [epgUrl, setEpgUrl] = React.useState(
     Object.prototype.hasOwnProperty.call(saved, 'epgUrl') ? String(saved.epgUrl ?? '') : DEFAULT_EPG_URL,
   );
   const [remember, setRemember] = React.useState(saved.rememberChannel !== false);
-  const [useProxy, setUseProxy] = React.useState(saved.useProxy !== false);
+  const [useProxy, setUseProxy] = React.useState(saved.useProxy === true);
   const [rememberProxyMode, setRememberProxyMode] = React.useState(saved.rememberProxyMode !== false);
 
   // ── Settings form state ──────────────────────────────────────────────────────
