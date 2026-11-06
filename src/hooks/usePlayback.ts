@@ -5,6 +5,7 @@ import { Channel, LastChannel } from '../types/player';
 import { normServer } from '../utils';
 import { CHANNEL_PROXY_MAX_VISITS, LAST_KEY } from '../constants';
 import { ProxyMemoryMap } from './useProxyMemory';
+import { installJoinFix } from '../player/mpegtsJoinFix';
 
 type StreamFormat = 'm3u8' | 'ts';
 
@@ -142,6 +143,10 @@ export function usePlayback({
     setHudTitle(ch.name || 'Playing');
     void fetchEpg(ch.stream_id, ch.epg_channel_id, ch.name);
 
+    // Reconnects in a row after a stream error mid-playback, each of which
+    // broke again soon after (see recoverWhilePlaying).
+    let quickReconnects = 0;
+
     const startAttempt = async (index: number, retry = 0) => {
       if (playToken !== playTokenRef.current) return;
       const attempt = attempts[index];
@@ -178,6 +183,9 @@ export function usePlayback({
       console.log('[Player] attempt', { index, retry, modeLabel, url });
 
       let settled = false;
+      // Frames are coming through (the black-screen guard saw them).
+      let playing = false;
+      let playingSince = 0;
       let blackGuard: ReturnType<typeof window.setTimeout> | null = null;
 
       const clearBlackGuard = () => {
@@ -225,6 +233,25 @@ export function usePlayback({
         }
       };
 
+      // A live stream can break after it started playing — a corrupt packet
+      // from the provider is a fatal decode error in Chrome. Previously that
+      // just froze the picture; reconnect instead, which also skips ahead to
+      // the live edge, past the damage. A stream that keeps breaking right
+      // after every reconnect still ends with a message.
+      const recoverWhilePlaying = (reason: string) => {
+        playing = false;
+        quickReconnects = Date.now() - playingSince >= 10000 ? 0 : quickReconnects + 1;
+        if (quickReconnects >= 3) {
+          giveUp(reason);
+          return;
+        }
+        console.warn('[Player] stream error while playing — reconnecting', { modeLabel, reason });
+        setHudSub(`${modeLabel} stream glitch — reconnecting…`);
+        setBuffering(true);
+        wakeHud();
+        setTimeout(() => { void startAttempt(index, 1); }, 200);
+      };
+
       // The <video> element's own error: the browser couldn't decode what it
       // was fed. Log the real reason (e.g. PIPELINE_ERROR_DECODE) — it's the
       // only clue to what about the stream the browser dislikes.
@@ -237,6 +264,10 @@ export function usePlayback({
       const onMediaError = () => {
         if (playToken !== playTokenRef.current) return;
         console.warn('[Player] <video> error', { code: v.error?.code, message: v.error?.message, modeLabel });
+        if (playing) {
+          recoverWhilePlaying(describeMediaError());
+          return;
+        }
         fallback(describeMediaError(), v.error?.code !== 4);
       };
       v.addEventListener('error', onMediaError);
@@ -295,6 +326,8 @@ export function usePlayback({
 
           if (frames > 0 || progressed || hasAudioBytes) {
             settled = true;
+            playing = true;
+            playingSince = Date.now();
             clearBlackGuard();
             rememberChannelPlaybackMode(attempt.viaProxy || attempt.viaTranscode);
             setBuffering(false);
@@ -394,6 +427,9 @@ export function usePlayback({
           { enableWorker: false, enableStashBuffer: true, lazyLoad: false, autoCleanupSourceBuffer: true },
         );
         mtsRef.current = p;
+        // Make channels decodable that Chrome would otherwise reject right
+        // after tuning in (open-GOP broadcast streams; see mpegtsJoinFix.ts).
+        installJoinFix(p);
         p.on(mpegts.Events.ERROR, (t: unknown, d: unknown, info: unknown) => {
           if (playToken !== playTokenRef.current) return;
           console.warn('[MPEGTS][error]', t, d, info);
@@ -401,8 +437,13 @@ export function usePlayback({
           // An MSE error once the <video> element itself has errored is just
           // fallout from that; the element's 'error' event reports the cause.
           if (v.error) return;
+          const reason = msg ? `${String(d)}: ${msg}` : String(d || t || 'stream error');
+          if (playing) {
+            recoverWhilePlaying(reason);
+            return;
+          }
           const unsupported = /unsupported|not supported/i.test(String(msg || ''));
-          fallback(msg ? `${String(d)}: ${msg}` : String(d || t || 'stream error'), !unsupported);
+          fallback(reason, !unsupported);
         });
         p.attachMediaElement(v);
         p.load();
