@@ -59,11 +59,15 @@ export function usePlayback({
   const hlsRef = React.useRef<Hls | null>(null);
   const mtsRef = React.useRef<ReturnType<typeof mpegts.createPlayer> | null>(null);
   const playTokenRef = React.useRef(0);
+  // Removes the per-attempt listeners we hang on the <video> element.
+  const detachMediaRef = React.useRef<(() => void) | null>(null);
 
   const [playingId, setPlayingId] = React.useState<string | null>(null);
   const [buffering, setBuffering] = React.useState(false);
 
   const stopPlayback = React.useCallback((preserveEpg = false) => {
+    detachMediaRef.current?.();
+    detachMediaRef.current = null;
     hlsRef.current?.destroy();
     hlsRef.current = null;
     try { mtsRef.current?.destroy(); } catch { /* noop */ }
@@ -138,7 +142,7 @@ export function usePlayback({
     setHudTitle(ch.name || 'Playing');
     void fetchEpg(ch.stream_id, ch.epg_channel_id, ch.name);
 
-    const startAttempt = async (index: number) => {
+    const startAttempt = async (index: number, retry = 0) => {
       if (playToken !== playTokenRef.current) return;
       const attempt = attempts[index];
       if (!attempt) {
@@ -152,10 +156,10 @@ export function usePlayback({
       // Brief pause to let old connections drain — prevents 403 from
       // IPTV servers that reject concurrent connections per account.
       const prevAttempt = index > 0 ? attempts[index - 1] : null;
-      const switchingDirectToProxy = !!(attempt.viaProxy && prevAttempt && !prevAttempt.viaProxy);
+      const switchingDirectToProxy = !!(retry === 0 && attempt.viaProxy && prevAttempt && !prevAttempt.viaProxy);
       const waitMs = switchingDirectToProxy
         ? 1800
-        : (index === 0 ? 150 : 300);
+        : (retry > 0 ? 600 : (index === 0 ? 150 : 300));
       await new Promise((r) => setTimeout(r, waitMs));
       if (playToken !== playTokenRef.current) return;
 
@@ -171,7 +175,7 @@ export function usePlayback({
       const modeLabel = `${attempt.playAs.toUpperCase()}${viaServer ? ' + Proxy' : ''}${attempt.viaTranscode ? ' + FFMPEG' : ''}`;
       setHudSub(`Connecting… ${modeLabel}`);
       wakeHud();
-      console.log('[Player] attempt', { index, modeLabel, url });
+      console.log('[Player] attempt', { index, retry, modeLabel, url });
 
       let settled = false;
       let blackGuard: ReturnType<typeof window.setTimeout> | null = null;
@@ -187,14 +191,21 @@ export function usePlayback({
       // retrying segments (and holding the provider connection) in the
       // background, and tell the user why.
       const giveUp = (reason?: string) => {
+        console.warn('[Player] giving up', { modeLabel, reason });
         stopPlayback(true);
         resetRememberedPlaybackMode();
-        setHudSub(reason ? `Cannot play this stream — ${reason}` : 'Cannot play this stream');
+        const hint = !useProxy && !attempt.viaProxy && !attempt.viaTranscode && reason && !/proxy|offline/i.test(reason)
+          ? ' (try enabling the proxy in Settings)'
+          : '';
+        setHudSub(reason ? `Cannot play this stream — ${reason}${hint}` : 'Cannot play this stream');
         setBuffering(false);
         wakeHud();
       };
 
-      const fallback = (reason?: string) => {
+      // `retryable`: the failure may be a one-off (a broken packet where we
+      // joined the live stream, a dropped connection), so when this is the
+      // last attempt left, reconnect once before giving up.
+      const fallback = (reason?: string, retryable = false) => {
         if (settled || playToken !== playTokenRef.current) return;
         settled = true;
         clearBlackGuard();
@@ -204,9 +215,65 @@ export function usePlayback({
           setHudSub(`${modeLabel} failed — retrying…`);
           wakeHud();
           setTimeout(() => { void startAttempt(index + 1); }, 200);
+        } else if (retryable && retry < 1) {
+          console.warn('[Player] reconnecting', { modeLabel, reason });
+          setHudSub(`${modeLabel} stream error — reconnecting…`);
+          wakeHud();
+          setTimeout(() => { void startAttempt(index, retry + 1); }, 200);
         } else {
           giveUp(reason);
         }
+      };
+
+      // The <video> element's own error: the browser couldn't decode what it
+      // was fed. Log the real reason (e.g. PIPELINE_ERROR_DECODE) — it's the
+      // only clue to what about the stream the browser dislikes.
+      const describeMediaError = () => {
+        const err = v.error;
+        if (!err) return 'media error';
+        const names: Record<number, string> = { 1: 'aborted', 2: 'network error', 3: 'decode error', 4: 'format not supported' };
+        return `${names[err.code] || `media error ${err.code}`}${err.message ? `: ${err.message}` : ''}`;
+      };
+      const onMediaError = () => {
+        if (playToken !== playTokenRef.current) return;
+        console.warn('[Player] <video> error', { code: v.error?.code, message: v.error?.message, modeLabel });
+        fallback(describeMediaError(), v.error?.code !== 4);
+      };
+      v.addEventListener('error', onMediaError);
+      detachMediaRef.current = () => v.removeEventListener('error', onMediaError);
+
+      // A rejected play() is not by itself a broken stream: it's rejected
+      // with AbortError whenever playback is interrupted (the element errored
+      // — handled above — or was paused/reloaded), and with NotAllowedError
+      // when the browser blocks autoplay with sound. Previously any rejection
+      // ended playback with "Cannot play this stream" after the first frame.
+      const startPlaying = () => {
+        v.play().catch((e: unknown) => {
+          if (settled || playToken !== playTokenRef.current) return;
+          const err = e as { name?: string; message?: string };
+          console.warn('[Player] play() rejected', err?.name, err?.message);
+          if (err?.name === 'NotAllowedError' && !v.muted) {
+            // Autoplay with sound blocked — play muted rather than not at all.
+            v.muted = true;
+            const unmute = () => {
+              v.muted = false;
+              window.removeEventListener('keydown', unmute, true);
+              window.removeEventListener('pointerdown', unmute, true);
+            };
+            window.addEventListener('keydown', unmute, true);
+            window.addEventListener('pointerdown', unmute, true);
+            setHudSub(`▶ Live (${modeLabel}) — muted, press any key for sound`);
+            wakeHud();
+            v.play().catch((e2: unknown) => {
+              if (settled || playToken !== playTokenRef.current) return;
+              const err2 = e2 as { name?: string; message?: string };
+              console.warn('[Player] muted play() rejected', err2?.name, err2?.message);
+              if (err2?.name === 'NotAllowedError') fallback('the browser blocked playback');
+            });
+          }
+          // Any other rejection: the media 'error' event, the player's own
+          // error events or the black-screen guard decide what happened.
+        });
       };
 
       const armBlackGuard = () => {
@@ -271,7 +338,7 @@ export function usePlayback({
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           if (settled || playToken !== playTokenRef.current) return;
           setHudSub(`▶ Live (${modeLabel})`);
-          v.play().catch(() => fallback());
+          startPlaying();
           armBlackGuard();
         });
         let nonFatalHlsErrorScore = 0;
@@ -327,14 +394,19 @@ export function usePlayback({
           { enableWorker: false, enableStashBuffer: true, lazyLoad: false, autoCleanupSourceBuffer: true },
         );
         mtsRef.current = p;
-        p.on(mpegts.Events.ERROR, (t: unknown, d: unknown) => {
+        p.on(mpegts.Events.ERROR, (t: unknown, d: unknown, info: unknown) => {
           if (playToken !== playTokenRef.current) return;
-          console.warn('[MPEGTS][error]', t, d);
-          fallback();
+          console.warn('[MPEGTS][error]', t, d, info);
+          const msg = (info as { msg?: string } | undefined)?.msg;
+          // An MSE error once the <video> element itself has errored is just
+          // fallout from that; the element's 'error' event reports the cause.
+          if (v.error) return;
+          const unsupported = /unsupported|not supported/i.test(String(msg || ''));
+          fallback(msg ? `${String(d)}: ${msg}` : String(d || t || 'stream error'), !unsupported);
         });
         p.attachMediaElement(v);
         p.load();
-        v.play().catch(() => fallback());
+        startPlaying();
         setHudSub(`▶ TS Live (${modeLabel})`);
         armBlackGuard();
         return;
@@ -346,8 +418,7 @@ export function usePlayback({
         setHudSub(`▶ Live (${modeLabel})`);
         armBlackGuard();
       };
-      v.onerror = () => fallback();
-      v.play().catch(() => fallback());
+      startPlaying();
     };
 
     void startAttempt(0);
