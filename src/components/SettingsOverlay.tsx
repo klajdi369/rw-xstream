@@ -33,6 +33,15 @@ export function SettingsOverlay(props: Props) {
   } = props;
 
   const [sel, setSel] = React.useState(0);
+
+  // Options that only matter together with another one are greyed out (and
+  // ignore OK/clicks) when it's off; their saved value is kept for later.
+  // - Proxy memory decides between direct and proxy per channel: proxy off,
+  //   nothing to decide.
+  // - The video check works on direct TS (format "ts"); m3u8 plays through
+  //   hls.js, and the proxy's ffmpeg output is clean already.
+  const proxyMemoryOff = !useProxy;
+  const checkVideoOff = fmt !== 'ts';
   const cardRef = React.useRef<HTMLDivElement>(null);
   const inputRefs = React.useRef<(HTMLInputElement | null)[]>([]);
 
@@ -51,12 +60,12 @@ export function SettingsOverlay(props: Props) {
         break;
       case 5: onChange({ remember: !remember }); break;
       case 6: onChange({ useProxy: !useProxy }); break;
-      case 7: onChange({ rememberProxyMode: !rememberProxyMode }); break;
-      case 8: onChange({ checkVideo: !checkVideo }); break;
+      case 7: if (!proxyMemoryOff) onChange({ rememberProxyMode: !rememberProxyMode }); break;
+      case 8: if (!checkVideoOff) onChange({ checkVideo: !checkVideo }); break;
       case 9: onConnect(); break;
       case 10: onClear(); break;
     }
-  }, [onChange, onConnect, onClear, remember, useProxy, rememberProxyMode, checkVideo]);
+  }, [onChange, onConnect, onClear, remember, useProxy, rememberProxyMode, checkVideo, proxyMemoryOff, checkVideoOff]);
 
   // The listener reads the latest state through a ref and stays registered
   // for as long as the panel is open. Re-registering it on every render lost
@@ -147,24 +156,28 @@ export function SettingsOverlay(props: Props) {
           </label>
         </div>
 
-        <div className={`toggleRow ${selClass(7)}`} data-sel={7} onClick={() => { setSel(7); onChange({ rememberProxyMode: !rememberProxyMode }); }}>
+        <div className={`toggleRow ${selClass(7)} ${proxyMemoryOff ? 'disabled' : ''}`} data-sel={7} aria-disabled={proxyMemoryOff} onClick={() => { setSel(7); activate(7); }}>
           <div>
             <div className="tLabel">Remember proxy mode per channel</div>
-            <div className="tDesc">Reset after 6 successful loads or on complete playback failure</div>
+            <div className="tDesc">{proxyMemoryOff
+              ? 'Only used with the proxy on'
+              : 'Reset after 6 successful loads or on complete playback failure'}</div>
           </div>
           <label className="toggle" onClick={(e) => e.stopPropagation()}>
-            <input type="checkbox" checked={rememberProxyMode} onChange={(e) => onChange({ rememberProxyMode: e.target.checked })} />
+            <input type="checkbox" checked={rememberProxyMode && !proxyMemoryOff} disabled={proxyMemoryOff} onChange={(e) => onChange({ rememberProxyMode: e.target.checked })} />
             <span className="toggleSlider" />
           </label>
         </div>
 
-        <div className={`toggleRow ${selClass(8)}`} data-sel={8} onClick={() => { setSel(8); onChange({ checkVideo: !checkVideo }); }}>
+        <div className={`toggleRow ${selClass(8)} ${checkVideoOff ? 'disabled' : ''}`} data-sel={8} aria-disabled={checkVideoOff} onClick={() => { setSel(8); activate(8); }}>
           <div>
             <div className="tLabel">Skip damaged video frames</div>
-            <div className="tDesc">Check each frame before showing it, so a damaged one is skipped instead of reconnecting. Uses extra CPU (around 40% of a core for an HD channel)</div>
+            <div className="tDesc">{checkVideoOff
+              ? 'Only works with format "ts"'
+              : 'Check each frame before showing it, so a damaged one is skipped instead of reconnecting. Uses extra CPU (around 40% of a core for an HD channel)'}</div>
           </div>
           <label className="toggle" onClick={(e) => e.stopPropagation()}>
-            <input type="checkbox" checked={checkVideo} onChange={(e) => onChange({ checkVideo: e.target.checked })} />
+            <input type="checkbox" checked={checkVideo && !checkVideoOff} disabled={checkVideoOff} onChange={(e) => onChange({ checkVideo: e.target.checked })} />
             <span className="toggleSlider" />
           </label>
         </div>

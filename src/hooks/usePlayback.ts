@@ -435,7 +435,9 @@ export function usePlayback({
         mtsRef.current = p;
         // Make channels decodable that Chrome would otherwise reject right
         // after tuning in (open-GOP broadcast streams; see mpegtsJoinFix.ts).
-        installJoinFix(p, { checkVideo });
+        // The check is for the provider's stream as is; the proxy's ffmpeg
+        // re-encodes it into a clean one, so checking that only costs CPU.
+        installJoinFix(p, { checkVideo: checkVideo && !viaServer });
         p.on(mpegts.Events.ERROR, (t: unknown, d: unknown, info: unknown) => {
           if (playToken !== playTokenRef.current) return;
           console.warn('[MPEGTS][error]', t, d, info);
