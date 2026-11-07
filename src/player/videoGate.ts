@@ -70,6 +70,9 @@ export class VideoGate {
   private reached = -1;
   /** Index of the last sample submitted to the current check decoder. */
   private submitted = -1;
+  /** Pace check (see keepingUp()): window start, and the oldest unconfirmed pts then. */
+  private paceSince = 0;
+  private paceFromPts = 0;
 
   constructor(private readonly release: (samples: GateSample[]) => void) {}
 
@@ -152,7 +155,42 @@ export class VideoGate {
     if (this.pending.length && Date.now() - this.waitingSince > 4000) {
       console.warn('[MPEGTS] video check produced no frames; turning it off');
       this.disable(this.passOut);
+      return;
     }
+    if (!this.keepingUp()) {
+      console.warn('[MPEGTS] video check is slower than real time on this device; turning it off');
+      this.disable(this.passOut);
+    }
+  }
+
+  /**
+   * The check must never hold playback back. Video only reaches the player
+   * as fast as the check decoder confirms it, so on a machine where that is
+   * slower than real time the player's buffer drains and playback stalls
+   * every few seconds — worse than the damage the check is there to skip.
+   * Whenever a backlog is waiting (a connect burst, or a decoder falling
+   * behind), measure how much video was confirmed over a few seconds;
+   * less than the time that passed means it can't keep up.
+   */
+  private keepingUp(): boolean {
+    const first = this.pending[0]?.sample.pts;
+    const last = this.pending[this.pending.length - 1]?.sample.pts;
+    if (first === undefined || last === undefined || last - first < 1500) {
+      this.paceSince = 0; // nothing much waiting: no pace to measure
+      return true;
+    }
+    const now = Date.now();
+    if (!this.paceSince) {
+      this.paceSince = now;
+      this.paceFromPts = first;
+      return true;
+    }
+    const wall = now - this.paceSince;
+    if (wall < 5000) return true;
+    const confirmed = first - this.paceFromPts; // pts are in ms
+    this.paceSince = now;
+    this.paceFromPts = first;
+    return confirmed >= wall * 0.95;
   }
 
   close() {
@@ -257,6 +295,7 @@ export class VideoGate {
     this.skipping = true;
     this.reached = -1;
     this.submitted = -1;
+    this.paceSince = 0;
     this.incoming.unshift(...recheck);
     // From the decoder's error callback: work through them now. (From inside
     // intake, drain() is already running and picks them up next.)

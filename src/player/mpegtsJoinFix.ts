@@ -32,6 +32,9 @@ import { AacValidator, adtsConfig } from './aacValidator';
 
 /* ---- Hooking into mpegts.js internals ---------------------------------- */
 
+/** How long an audio packet may wait for validation before it skips it. */
+const AUDIO_CHECK_MAX_LAG_MS = 1000;
+
 type DataCallback = (audio: unknown, video: VideoTrack | null) => void;
 
 interface DemuxerLike {
@@ -152,9 +155,14 @@ function hookAudio(demuxer: DemuxerLike) {
       return;
     }
     const copy = data.slice();
+    const queuedAt = Date.now();
     pending++;
     queue = queue
-      .then(() => handle(copy, pts, true))
+      // Audio only reaches the player as fast as it is validated. If the
+      // decoder falls behind (a slow device, a big connect burst), pass
+      // packets on with the structural checks alone until it has caught up,
+      // rather than starve playback of audio.
+      .then(() => handle(copy, pts, Date.now() - queuedAt < AUDIO_CHECK_MAX_LAG_MS))
       // mpegts.js hands parsed samples on at the end of each chunk it reads;
       // ours arrive after that, so hand them on ourselves.
       .then(() => { if (!dead) demuxer.dispatchAudioMediaSegment?.(); })

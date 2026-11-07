@@ -149,6 +149,9 @@ export function usePlayback({
     // Reconnects in a row after a stream error mid-playback, each of which
     // broke again soon after (see recoverWhilePlaying).
     let quickReconnects = 0;
+    // Reconnects in a row because the stream arrived slower than real time
+    // (see the TS branch); capped so a channel slow everywhere still plays.
+    let slowReconnects = 0;
 
     const startAttempt = async (index: number, retry = 0) => {
       if (playToken !== playTokenRef.current) return;
@@ -502,10 +505,42 @@ export function usePlayback({
           if (playing && !v.paused && bufferedAhead() < 0.5) hold(true);
         };
         v.addEventListener('waiting', onWaiting);
+
+        // Now and then a connection delivers the channel slower than real
+        // time: no backlog, then 0.3–0.7× for as long as it lasts (measured;
+        // the provider's side — the next connection is usually fine). No
+        // cushion rides that out, playback would stall every few seconds.
+        // So when video keeps arriving clearly slower than it plays and the
+        // buffer is low, reconnect.
+        const SLOW_WINDOW_MS = 8000;
+        const SLOW_RATE = 0.7;
+        const edge: { at: number; end: number }[] = [];
+        const slowWatch = window.setInterval(() => {
+          if (playToken !== playTokenRef.current) return;
+          if (!v.buffered.length) return;
+          const now = Date.now();
+          edge.push({ at: now, end: v.buffered.end(v.buffered.length - 1) });
+          while (edge.length > 1 && now - edge[1].at >= SLOW_WINDOW_MS) edge.shift();
+          const span = now - edge[0].at;
+          if (span < SLOW_WINDOW_MS) return;
+          const rate = (edge[edge.length - 1].end - edge[0].end) / (span / 1000);
+          if (rate >= 0.95) slowReconnects = 0; // healthy again: count afresh
+          if (rate >= SLOW_RATE || bufferedAhead() >= 2 || slowReconnects >= 2) return;
+          slowReconnects += 1;
+          console.warn('[Player] stream arrives slower than real time — reconnecting', { modeLabel, rate: rate.toFixed(2) });
+          setHudSub(`${modeLabel} slow stream — reconnecting…`);
+          setBuffering(true);
+          wakeHud();
+          settled = true;
+          clearBlackGuard();
+          void startAttempt(index, 1);
+        }, 1000);
+
         const detachEarlier = detachMediaRef.current;
         detachMediaRef.current = () => {
           detachEarlier?.();
           v.removeEventListener('waiting', onWaiting);
+          window.clearInterval(slowWatch);
           clearHold();
         };
 
