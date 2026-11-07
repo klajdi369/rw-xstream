@@ -67,6 +67,8 @@ export default function App() {
   const [remember, setRemember] = React.useState(saved.rememberChannel !== false);
   const [useProxy, setUseProxy] = React.useState(saved.useProxy === true);
   const [rememberProxyMode, setRememberProxyMode] = React.useState(saved.rememberProxyMode !== false);
+  // Off by default: costs a second (software) decode of the video.
+  const [checkVideo, setCheckVideo] = React.useState(saved.checkVideo === true);
 
   // ── Settings form state ──────────────────────────────────────────────────────
   const [msg, setMsg] = React.useState('');
@@ -185,6 +187,7 @@ export default function App() {
     fmt,
     useProxy,
     rememberProxyMode,
+    checkVideo,
     remember,
     fetchEpg,
     clearEpg,
@@ -293,6 +296,7 @@ export default function App() {
         rememberChannel: remember,
         useProxy,
         rememberProxyMode,
+        checkVideo,
       }));
 
       setConnectMsg('Loading channels…');
@@ -875,6 +879,7 @@ export default function App() {
         remember={remember}
         useProxy={useProxy}
         rememberProxyMode={rememberProxyMode}
+        checkVideo={checkVideo}
         message={msg}
         isError={msgIsError}
         progress={settingsProgress}
@@ -887,6 +892,14 @@ export default function App() {
           if (patch.remember !== undefined) setRemember(patch.remember);
           if (patch.useProxy !== undefined) setUseProxy(patch.useProxy);
           if (patch.rememberProxyMode !== undefined) setRememberProxyMode(patch.rememberProxyMode);
+          if (patch.checkVideo !== undefined) {
+            setCheckVideo(patch.checkVideo);
+            // Takes effect on the next channel; keep it without needing Connect.
+            try {
+              const stored = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}');
+              localStorage.setItem(SAVE_KEY, JSON.stringify({ ...stored, checkVideo: patch.checkVideo }));
+            } catch { /* storage unavailable */ }
+          }
         }}
         onConnect={connect}
         onClose={() => setSettingsOpen(false)}

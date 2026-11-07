@@ -655,3 +655,39 @@ export class H264JoinRepair {
     this.refs = this.refs.filter((e) => !(e.gap && zext(frameNum - e.frameNum) > refCount));
   }
 }
+
+/* ---- Picture structure of a sample -------------------------------------- */
+
+export interface PictureInfo { frameNum: number; field: boolean; bottom: boolean }
+
+/** Reads frame_num / field parity from slice headers (for pairing fields). */
+export class H264SliceInfo {
+  private readonly sps = new Map<number, Sps>();
+  private readonly pps = new Map<number, Pps>();
+
+  learn(nal: Uint8Array | null | undefined) {
+    if (!nal || nal.length < 2) return;
+    const type = nal[0] & 0x1f;
+    try {
+      if (type === 7) { const p = parseSps(toRbsp(nal)); this.sps.set(p.id, p.sps); }
+      if (type === 8) { const p = parsePps(toRbsp(nal)); this.pps.set(p.id, p.pps); }
+    } catch { /* ignore */ }
+  }
+
+  /** Structure of the first slice among `nals`; null if unknown. */
+  info(nals: Uint8Array[]): PictureInfo | null {
+    for (const nal of nals) {
+      if (nal.length < 2) continue;
+      const type = nal[0] & 0x1f;
+      if (type === 7 || type === 8) { this.learn(nal); continue; }
+      if (type !== 1 && type !== 5) continue;
+      try {
+        const h = parseSliceHeader(toRbsp(nal.subarray(0, 512)), this.sps, this.pps);
+        return h ? { frameNum: h.frameNum, field: h.field, bottom: h.bottom } : null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}

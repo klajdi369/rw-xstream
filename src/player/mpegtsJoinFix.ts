@@ -25,89 +25,10 @@
  * isn't installed and playback behaves as before.
  */
 
-import { H264JoinRepair } from './h264JoinRepair';
+import { JoinFixer, VideoTrack } from './joinFixer';
+import { VideoGate, GateSample } from './videoGate';
 import { checkAdtsPayload, AdtsRun } from './adtsSanitizer';
 import { AacValidator, adtsConfig } from './aacValidator';
-
-interface NalUnit { type: number; data: Uint8Array } // data: 4-byte length + NAL
-interface VideoSample {
-  units: NalUnit[];
-  length: number;
-  isKeyframe: boolean;
-  pts: number;
-}
-interface VideoTrack { samples: VideoSample[]; length: number }
-
-/** Drops the leading pictures of the first keyframe. */
-export class LeadingPictureFilter {
-  /** pts of the keyframe we started on; null until it arrives. */
-  private startPts: number | null = null;
-  private done = false;
-  dropped = 0;
-
-  /** Returns the samples to keep (all of them once past the first GOP). */
-  filter(samples: VideoSample[]): VideoSample[] {
-    if (this.done) return samples;
-    const kept: VideoSample[] = [];
-    for (const s of samples) {
-      if (this.done) { kept.push(s); continue; }
-      if (s.isKeyframe) {
-        if (this.startPts === null) this.startPts = s.pts;
-        else if (s.pts > this.startPts) this.done = true; // next GOP: references are in place
-        kept.push(s);
-      } else if (this.startPts === null || s.pts < this.startPts) {
-        this.dropped++; // before the first keyframe, or a leading picture of it
-      } else {
-        kept.push(s);
-      }
-    }
-    return kept;
-  }
-}
-
-/** Both repairs over a demuxer's video track, applied once per sample. */
-export class JoinFixer {
-  private readonly leading = new LeadingPictureFilter();
-  private readonly repair = new H264JoinRepair();
-  /** Samples already processed (the remuxer may leave one in the track). */
-  private readonly seen = new WeakSet<VideoSample>();
-  private announced = false;
-
-  learn(nal: Uint8Array | null | undefined) { this.repair.learn(nal); }
-
-  process(track: VideoTrack) {
-    const fresh = track.samples.filter((s) => !this.seen.has(s));
-    if (!fresh.length) return;
-    const keep = new Set(this.leading.filter(fresh));
-    let changed = keep.size !== fresh.length;
-
-    for (const s of fresh) {
-      this.seen.add(s);
-      if (!keep.has(s) || !this.repair.isActive) continue;
-      if (s.isKeyframe) this.repair.keyframe();
-      for (const unit of s.units) {
-        const nal = unit.data.subarray(4);
-        const fixed = this.repair.nal(nal);
-        if (fixed === nal) continue;
-        const data = new Uint8Array(4 + fixed.length);
-        new DataView(data.buffer).setUint32(0, fixed.length);
-        data.set(fixed, 4);
-        s.length += data.length - unit.data.length;
-        unit.data = data;
-        changed = true;
-      }
-    }
-
-    if (!changed) return;
-    if (!this.announced && this.leading.dropped) {
-      this.announced = true;
-      console.info(`[MPEGTS] dropped ${this.leading.dropped} undecodable picture(s) at stream start`);
-    }
-    const dropped = new Set(fresh.filter((s) => !keep.has(s)));
-    track.samples = track.samples.filter((s) => !dropped.has(s));
-    track.length = track.samples.reduce((n, s) => n + s.length, 0);
-  }
-}
 
 /* ---- Hooking into mpegts.js internals ---------------------------------- */
 
@@ -252,7 +173,15 @@ interface EngineLike {
   __joinFix?: boolean;
 }
 
-function hookController(controller: ControllerLike | undefined): boolean {
+export interface JoinFixOptions {
+  /** Check video frames with WebCodecs and skip damaged ones (videoGate.ts). */
+  checkVideo?: boolean;
+}
+
+/** The video track and its samples as the demuxer hands them on. */
+type DemuxerVideo = { video_track_?: VideoTrack };
+
+function hookController(controller: ControllerLike | undefined, options: JoinFixOptions): boolean {
   if (!controller || typeof controller._setupTSDemuxerRemuxer !== 'function') return false;
   if (controller.__joinFix) return true;
   controller.__joinFix = true;
@@ -265,15 +194,23 @@ function hookController(controller: ControllerLike | undefined): boolean {
     if (!demuxer || typeof forward !== 'function') return;
 
     hookAudio(demuxer);
+    // The demuxer consumes the first SPS/PPS before it produces any
+    // samples, so they're only in its metadata.
+    const paramSets = () => {
+      const meta = demuxer.video_metadata_;
+      return [meta?.sps?.data?.subarray(4), meta?.pps?.data?.subarray(4)];
+    };
+
+    if (options.checkVideo && VideoGate.available()) {
+      hookGate(demuxer, forward, paramSets);
+      return;
+    }
+
     const fixer = new JoinFixer();
     demuxer.onDataAvailable = (audio, video) => {
       if (video?.samples?.length) {
         try {
-          // The demuxer consumes the first SPS/PPS before it produces any
-          // samples, so they're only in its metadata.
-          const meta = demuxer.video_metadata_;
-          fixer.learn(meta?.sps?.data?.subarray(4));
-          fixer.learn(meta?.pps?.data?.subarray(4));
+          paramSets().forEach((n) => fixer.learn(n));
           fixer.process(video);
         } catch (e) {
           console.warn('[MPEGTS] join fix failed', e);
@@ -286,11 +223,72 @@ function hookController(controller: ControllerLike | undefined): boolean {
 }
 
 /**
+ * Route video through the VideoGate: new samples are taken out of the track
+ * and come back (to the same track, then on to the remuxer) once checked —
+ * synchronously when nothing needs waiting, otherwise a little later.
+ */
+function hookGate(demuxer: DemuxerLike & DemuxerVideo, forward: DataCallback, paramSets: () => (Uint8Array | undefined)[]) {
+  const handedOn = new WeakSet<object>();
+  let inCallback = false;
+  let dead = false;
+  let videoStarted = false;
+
+  const gate = new VideoGate((samples: GateSample[]) => {
+    const track = demuxer.video_track_;
+    if (dead || !track) return;
+    for (const s of samples) {
+      handedOn.add(s);
+      track.samples.push(s);
+      track.length += s.length;
+    }
+    videoStarted = true;
+    if (!inCallback) {
+      try { forward(null, track); } catch (e) { console.warn('[MPEGTS] video hand-on failed', e); }
+    }
+  });
+
+  const destroy = demuxer.destroy;
+  if (typeof destroy === 'function') {
+    demuxer.destroy = function (this: DemuxerLike) {
+      dead = true;
+      gate.close();
+      destroy.call(this);
+    };
+  }
+
+  demuxer.onDataAvailable = (audio, video) => {
+    if (video?.samples?.length) {
+      const fresh = video.samples.filter((s) => !handedOn.has(s));
+      if (fresh.length) {
+        video.samples = video.samples.filter((s) => handedOn.has(s));
+        video.length = video.samples.reduce((n, s) => n + s.length, 0);
+        inCallback = true;
+        try {
+          paramSets().forEach((n) => gate.learn(n));
+          gate.push(fresh as GateSample[]);
+        } catch (e) {
+          console.warn('[MPEGTS] video check failed', e);
+        } finally {
+          inCallback = false;
+        }
+      }
+    }
+    // mpegts.js fixes its timestamp base on the first segment it remuxes;
+    // hold audio until there is video too, or video could start before it.
+    if (!videoStarted) {
+      if (video?.samples?.length) videoStarted = true;
+      else return;
+    }
+    forward(audio, video);
+  };
+}
+
+/**
  * Install the join fix on an mpegts.js player. Call after createPlayer() and
  * before load(). Returns false if the player's internals aren't what we
  * expect (nothing is changed then).
  */
-export function installJoinFix(player: unknown): boolean {
+export function installJoinFix(player: unknown, options: JoinFixOptions = {}): boolean {
   const engine = (player as { _player_engine?: EngineLike } | null)?._player_engine;
   if (!engine || typeof engine.load !== 'function') return false;
   if (engine.__joinFix) return true;
@@ -301,9 +299,12 @@ export function installJoinFix(player: unknown): boolean {
   const load = engine.load;
   engine.load = function (this: EngineLike) {
     load.call(this);
-    if (this._transmuxer && !hookController(this._transmuxer._controller)) {
+    if (this._transmuxer && !hookController(this._transmuxer._controller, options)) {
       console.warn('[MPEGTS] join fix unavailable for this mpegts.js version');
     }
   };
+  if (options.checkVideo && !VideoGate.available()) {
+    console.warn('[MPEGTS] video check needs WebCodecs, which this browser lacks');
+  }
   return true;
 }

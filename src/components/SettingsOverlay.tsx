@@ -11,6 +11,7 @@ type Props = {
   remember: boolean;
   useProxy: boolean;
   rememberProxyMode: boolean;
+  checkVideo: boolean;
   message: string;
   isError?: boolean;
   progress?: number;
@@ -23,11 +24,11 @@ type Props = {
 // The panel is one linear list of focusable rows so it can be driven entirely
 // by a remote: ↑/↓ move the highlight, OK edits a field / flips a toggle /
 // presses a button, Back closes.
-const ITEM_COUNT = 10; // server, fmt, user, pass, EPG, + 3 toggles, + Connect, Clear
+const ITEM_COUNT = 11; // server, fmt, user, pass, EPG, + 4 toggles, + Connect, Clear
 
 export function SettingsOverlay(props: Props) {
   const {
-    open, server, user, pass, fmt, epgUrl, remember, useProxy, rememberProxyMode,
+    open, server, user, pass, fmt, epgUrl, remember, useProxy, rememberProxyMode, checkVideo,
     message, isError, progress, onChange, onConnect, onClear, onClose,
   } = props;
 
@@ -51,10 +52,19 @@ export function SettingsOverlay(props: Props) {
       case 5: onChange({ remember: !remember }); break;
       case 6: onChange({ useProxy: !useProxy }); break;
       case 7: onChange({ rememberProxyMode: !rememberProxyMode }); break;
-      case 8: onConnect(); break;
-      case 9: onClear(); break;
+      case 8: onChange({ checkVideo: !checkVideo }); break;
+      case 9: onConnect(); break;
+      case 10: onClear(); break;
     }
-  }, [onChange, onConnect, onClear, remember, useProxy, rememberProxyMode]);
+  }, [onChange, onConnect, onClear, remember, useProxy, rememberProxyMode, checkVideo]);
+
+  // The listener reads the latest state through a ref and stays registered
+  // for as long as the panel is open. Re-registering it on every render lost
+  // keys: App re-renders in the middle of a keydown (its key indicator), and a
+  // listener removed and re-added during an event never sees that event — so
+  // OK on a toggle row did nothing.
+  const latest = React.useRef({ sel, activate, onClose });
+  latest.current = { sel, activate, onClose };
 
   React.useEffect(() => {
     if (!open) return;
@@ -63,14 +73,15 @@ export function SettingsOverlay(props: Props) {
       // While a field is focused for typing, its own onKeyDown handles exit keys.
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
 
-      if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); onClose(); return; }
+      const { sel: current, activate: run, onClose: close } = latest.current;
+      if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); close(); return; }
       if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); setSel((v) => clamp(v + 1, 0, ITEM_COUNT - 1)); return; }
       if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); setSel((v) => clamp(v - 1, 0, ITEM_COUNT - 1)); return; }
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(sel); return; }
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); run(current); return; }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, sel, activate, onClose]);
+  }, [open]);
 
   // Inside a text field: leave back to row navigation without the field
   // swallowing the keystroke.
@@ -146,13 +157,24 @@ export function SettingsOverlay(props: Props) {
             <span className="toggleSlider" />
           </label>
         </div>
+
+        <div className={`toggleRow ${selClass(8)}`} data-sel={8} onClick={() => { setSel(8); onChange({ checkVideo: !checkVideo }); }}>
+          <div>
+            <div className="tLabel">Skip damaged video frames</div>
+            <div className="tDesc">Check each frame before showing it, so a damaged one is skipped instead of reconnecting. Uses extra CPU (around 40% of a core for an HD channel)</div>
+          </div>
+          <label className="toggle" onClick={(e) => e.stopPropagation()}>
+            <input type="checkbox" checked={checkVideo} onChange={(e) => onChange({ checkVideo: e.target.checked })} />
+            <span className="toggleSlider" />
+          </label>
+        </div>
         {(progress !== undefined && progress > 0) && (
           <div className="progBar"><div className="progFill" style={{ width: `${progress}%` }} /></div>
         )}
         <div className="settActions">
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button className={`btn btnP ${selClass(8)}`} data-sel={8} onClick={onConnect}>Connect</button>
-            <button className={`btn btnD ${selClass(9)}`} data-sel={9} onClick={onClear}>Clear Saved</button>
+            <button className={`btn btnP ${selClass(9)}`} data-sel={9} onClick={onConnect}>Connect</button>
+            <button className={`btn btnD ${selClass(10)}`} data-sel={10} onClick={onClear}>Clear Saved</button>
           </div>
           {message && <div className={`msg ${isError ? 'err' : 'ok'}`}>{message}</div>}
         </div>

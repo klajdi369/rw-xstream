@@ -26,6 +26,8 @@ interface UsePlaybackOptions {
   fmt: string;
   useProxy: boolean;
   rememberProxyMode: boolean;
+  /** Validate video frames with WebCodecs and skip damaged ones (extra CPU). */
+  checkVideo: boolean;
   remember: boolean;
   fetchEpg: (id: string | number, epgChannelId?: string | null, channelName?: string) => Promise<void>;
   clearEpg: () => void;
@@ -47,6 +49,7 @@ export function usePlayback({
   fmt,
   useProxy,
   rememberProxyMode,
+  checkVideo,
   remember,
   fetchEpg,
   clearEpg,
@@ -429,7 +432,7 @@ export function usePlayback({
         mtsRef.current = p;
         // Make channels decodable that Chrome would otherwise reject right
         // after tuning in (open-GOP broadcast streams; see mpegtsJoinFix.ts).
-        installJoinFix(p);
+        installJoinFix(p, { checkVideo });
         p.on(mpegts.Events.ERROR, (t: unknown, d: unknown, info: unknown) => {
           if (playToken !== playTokenRef.current) return;
           console.warn('[MPEGTS][error]', t, d, info);
@@ -477,6 +480,7 @@ export function usePlayback({
     readChannelProxyMemory,
     remember,
     rememberProxyMode,
+    checkVideo,
     server,
     setHudSub,
     setHudTitle,
