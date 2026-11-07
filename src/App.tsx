@@ -787,7 +787,7 @@ export default function App() {
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
     <>
-      <div id="videoLayer"><video id="video" ref={videoRef} autoPlay playsInline /></div>
+      <div id="videoLayer"><video id="video" ref={videoRef} playsInline /></div>
 
       <div id="bufferOverlay" className={buffering ? 'show' : ''}>
         <div className="bufferSpin" />

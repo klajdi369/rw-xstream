@@ -62,6 +62,14 @@ export class VideoGate {
   private waitingSince = 0;
   private dropped = 0;
   private lastReport = 0;
+  /** Samples waiting to go through intake (new ones, or ones to re-check). */
+  private incoming: GateSample[] = [];
+  private draining = false;
+  private passOut: GateSample[] = [];
+  /** Index of the last sample the check decoder has taken off its queue. */
+  private reached = -1;
+  /** Index of the last sample submitted to the current check decoder. */
+  private submitted = -1;
 
   constructor(private readonly release: (samples: GateSample[]) => void) {}
 
@@ -82,51 +90,69 @@ export class VideoGate {
 
   /** New samples from the demuxer, in decoding order. */
   push(samples: GateSample[]) {
-    const pass: GateSample[] = [];
-    for (const s of samples) {
-      for (const u of s.units) if (u.type === 7 || u.type === 8) this.learn(u.data.subarray(4));
+    this.incoming.push(...samples);
+    this.drain();
+  }
 
-      if (this.skipping) {
-        if (!s.isKeyframe) { this.dropped++; continue; }
-        // Resume here as if we had just tuned in.
-        this.skipping = false;
-        this.fixer = new JoinFixer();
-        this.fixer.learn(this.sps);
-        this.fixer.learn(this.pps);
-      }
-
-      const one = { samples: [s as VideoSample], length: s.length };
-      this.fixer.process(one);
-      if (!one.samples.length) continue; // dropped by the join repairs
-
-      if (this.disabled) { pass.push(s); continue; }
-      if (!this.decoder) {
-        this.decoder = this.open();
-        if (!this.decoder) { this.disable(pass); pass.push(s); continue; }
-      }
-
-      const idx = this.seq++;
-      if (!this.pending.length) this.waitingSince = Date.now();
-      this.pending.push({ idx, sample: s, info: this.slices.info(s.units.map((u) => u.data.subarray(4))) });
-      try {
-        const data = new Uint8Array(s.units.reduce((n, u) => n + u.data.length, 0));
-        let o = 0;
-        for (const u of s.units) { data.set(u.data, o); o += u.data.length; }
-        const G = globalThis as unknown as { EncodedVideoChunk: new (i: unknown) => unknown };
-        this.decoder.decode(new G.EncodedVideoChunk({ type: s.isKeyframe ? 'key' : 'delta', timestamp: idx, data }));
-      } catch (e) {
-        this.onError(e);
-      }
-
-      // Nothing confirmed for a long time: the check isn't working here.
-      // (Time, not count: a provider sends seconds of video in one burst at
-      // connect, and the decoder works through it asynchronously.)
-      if (this.pending.length && Date.now() - this.waitingSince > 4000) {
-        console.warn('[MPEGTS] video check produced no frames; turning it off');
-        this.disable(pass);
-      }
+  private drain() {
+    if (this.draining) return; // onError() during intake queues more work
+    this.draining = true;
+    try {
+      while (this.incoming.length) this.intake(this.incoming.shift()!);
+    } finally {
+      this.draining = false;
     }
-    if (pass.length) this.release(pass);
+    if (this.passOut.length) {
+      const out = this.passOut;
+      this.passOut = [];
+      this.release(out);
+    }
+  }
+
+  private intake(s: GateSample) {
+    for (const u of s.units) if (u.type === 7 || u.type === 8) this.learn(u.data.subarray(4));
+
+    if (this.skipping) {
+      if (!s.isKeyframe) { this.dropped++; return; }
+      // Resume here as if we had just tuned in.
+      this.skipping = false;
+      this.fixer = new JoinFixer();
+      this.fixer.learn(this.sps);
+      this.fixer.learn(this.pps);
+    }
+
+    const one = { samples: [s as VideoSample], length: s.length };
+    this.fixer.process(one);
+    if (!one.samples.length) return; // dropped by the join repairs
+
+    if (this.disabled) { this.passOut.push(s); return; }
+    if (!this.decoder) {
+      this.decoder = this.open();
+      if (!this.decoder) { this.disable(this.passOut); this.passOut.push(s); return; }
+    }
+
+    const idx = this.seq++;
+    if (!this.pending.length) this.waitingSince = Date.now();
+    this.pending.push({ idx, sample: s, info: this.slices.info(s.units.map((u) => u.data.subarray(4))) });
+    try {
+      const data = new Uint8Array(s.units.reduce((n, u) => n + u.data.length, 0));
+      let o = 0;
+      for (const u of s.units) { data.set(u.data, o); o += u.data.length; }
+      const G = globalThis as unknown as { EncodedVideoChunk: new (i: unknown) => unknown };
+      this.decoder.decode(new G.EncodedVideoChunk({ type: s.isKeyframe ? 'key' : 'delta', timestamp: idx, data }));
+      this.submitted = idx;
+    } catch (e) {
+      this.onError(e);
+      return;
+    }
+
+    // Nothing confirmed for a long time: the check isn't working here.
+    // (Time, not count: a provider sends seconds of video in one burst at
+    // connect, and the decoder works through it asynchronously.)
+    if (this.pending.length && Date.now() - this.waitingSince > 4000) {
+      console.warn('[MPEGTS] video check produced no frames; turning it off');
+      this.disable(this.passOut);
+    }
   }
 
   close() {
@@ -157,17 +183,23 @@ export class VideoGate {
           this.outputsSinceOpen++;
           this.failuresWithoutOutput = 0;
           if (idx > this.maxOut) this.maxOut = idx;
+          if (idx > this.reached) this.reached = idx;
           this.releaseConfirmed();
         },
         error: (e: unknown) => { if (dec === this.decoder) this.onError(e); },
-      });
+      }) as DecoderLike & { decodeQueueSize: number; ondequeue: (() => void) | null };
+      // How far the decoder has got: what it has taken off its queue.
+      dec.ondequeue = () => {
+        if (dec === this.decoder) this.reached = Math.max(this.reached, this.submitted - dec.decodeQueueSize);
+      };
       dec.configure({
         codec: `avc1.${hex(this.sps[1])}${hex(this.sps[2])}${hex(this.sps[3])}`,
         description: avcC(this.sps, this.pps),
         // The player's decoder for these streams is ffmpeg in software; check
-        // with the same one. Low latency: confirm frames sooner.
+        // with the same one. Not optimizeForLatency: that makes ffmpeg decode
+        // on one thread, which can't keep up with 1080i in real time on many
+        // machines — frames then trickle out and playback stalls.
         hardwareAcceleration: 'prefer-software',
-        optimizeForLatency: true,
       });
       return dec;
     } catch (e) {
@@ -212,10 +244,23 @@ export class VideoGate {
       if (out.length) this.release(out);
       return;
     }
-    this.dropped += this.pending.length;
+    // The damaged sample is one the decoder had already taken: at most
+    // `reached`. Samples queued behind it were never decoded — after a
+    // connect burst that can be many seconds of video — so keep those from
+    // the first keyframe past that point and check them again with a fresh
+    // decoder; drop only the stretch in between.
+    const from = this.pending.findIndex((p) => p.idx > Math.max(this.reached, this.maxOut) && p.sample.isKeyframe);
+    const recheck = from < 0 ? [] : this.pending.slice(from).map((p) => p.sample);
+    this.dropped += from < 0 ? this.pending.length : from;
     this.pending = [];
     this.lastReleased = null;
     this.skipping = true;
+    this.reached = -1;
+    this.submitted = -1;
+    this.incoming.unshift(...recheck);
+    // From the decoder's error callback: work through them now. (From inside
+    // intake, drain() is already running and picks them up next.)
+    queueMicrotask(() => this.drain());
     const now = Date.now();
     if (now - this.lastReport > 5000) {
       this.lastReport = now;

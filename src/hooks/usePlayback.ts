@@ -315,9 +315,12 @@ export function usePlayback({
 
         const startedAt = Date.now();
         const isDirectHls = attempt.playAs === 'm3u8' && !attempt.viaProxy && !attempt.viaTranscode;
+        // Direct TS: providers often redirect a couple of times and then send
+        // a backlog burst, so the first frame can take a while; with the proxy
+        // off this is the only attempt, so giving up early helps nobody.
         const maxWaitMs = attempt.viaTranscode
           ? 20000
-          : (attempt.viaProxy ? 7000 : (isDirectHls ? 2600 : 4000));
+          : (attempt.viaProxy ? 7000 : (isDirectHls ? 2600 : 8000));
 
         const probe = () => {
           if (settled || playToken !== playTokenRef.current) return;
@@ -450,7 +453,61 @@ export function usePlayback({
         });
         p.attachMediaElement(v);
         p.load();
-        startPlaying();
+
+        // Playback cushion, like VLC's network caching. Some providers send a
+        // backlog when we connect and some don't; without one, playing right
+        // at the live edge leaves a fraction of a second of buffer, and their
+        // normal delivery jitter (measured at up to 1.5 s) becomes a stall
+        // every few seconds. So start — and resume after a stall — only once
+        // a few seconds are buffered. With a backlog that's immediate.
+        const CUSHION_S = 3;
+        const MAX_HOLD_MS = 6000;
+        const bufferedAhead = () => {
+          const t = v.currentTime;
+          for (let i = 0; i < v.buffered.length; i++) {
+            const start = v.buffered.start(i);
+            const end = v.buffered.end(i);
+            if (end > t && start <= Math.max(t, v.buffered.start(0)) + 0.3) return end - Math.max(t, start);
+          }
+          return 0;
+        };
+        let holdTimer: ReturnType<typeof window.setInterval> | null = null;
+        const clearHold = () => {
+          if (holdTimer !== null) window.clearInterval(holdTimer);
+          holdTimer = null;
+        };
+        const hold = (afterStall: boolean) => {
+          if (holdTimer !== null) return;
+          // Count the time limit from the first buffered data, so a slow
+          // connect doesn't use it up and start us with nothing buffered.
+          let since = Date.now();
+          if (afterStall) {
+            console.log('[Player] stalled — rebuffering', { ahead: bufferedAhead() });
+            v.pause();
+            setBuffering(true);
+          }
+          holdTimer = window.setInterval(() => {
+            if (playToken !== playTokenRef.current) { clearHold(); return; }
+            const ahead = bufferedAhead();
+            if (!afterStall && ahead === 0) since = Date.now();
+            if (ahead < CUSHION_S && Date.now() - since < MAX_HOLD_MS) return;
+            clearHold();
+            if (afterStall) setBuffering(false);
+            startPlaying();
+          }, 200);
+        };
+        const onWaiting = () => {
+          if (playing && !v.paused && bufferedAhead() < 0.5) hold(true);
+        };
+        v.addEventListener('waiting', onWaiting);
+        const detachEarlier = detachMediaRef.current;
+        detachMediaRef.current = () => {
+          detachEarlier?.();
+          v.removeEventListener('waiting', onWaiting);
+          clearHold();
+        };
+
+        hold(false);
         setHudSub(`▶ TS Live (${modeLabel})`);
         armBlackGuard();
         return;
