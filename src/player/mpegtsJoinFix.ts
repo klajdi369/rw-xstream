@@ -26,6 +26,8 @@
  */
 
 import { H264JoinRepair } from './h264JoinRepair';
+import { checkAdtsPayload, AdtsRun } from './adtsSanitizer';
+import { AacValidator, adtsConfig } from './aacValidator';
 
 interface NalUnit { type: number; data: Uint8Array } // data: 4-byte length + NAL
 interface VideoSample {
@@ -114,6 +116,130 @@ type DataCallback = (audio: unknown, video: VideoTrack | null) => void;
 interface DemuxerLike {
   onDataAvailable?: DataCallback;
   video_metadata_?: { sps?: { data?: Uint8Array }; pps?: { data?: Uint8Array } };
+  parseADTSAACPayload?: (data: Uint8Array, pts: number | undefined) => void;
+  aac_last_incomplete_data_?: Uint8Array | null;
+  audio_init_segment_dispatched_?: boolean;
+  dispatchAudioMediaSegment?: () => void;
+  destroy?: () => void;
+}
+
+/** Join consecutive frames back into runs (a gap starts a new run). */
+function regroup(frames: { frameIndex: number; bytes: Uint8Array }[]): AdtsRun[] {
+  const groups: { frameIndex: number; parts: Uint8Array[] }[] = [];
+  let next = -1;
+  for (const f of frames) {
+    if (f.frameIndex !== next) groups.push({ frameIndex: f.frameIndex, parts: [] });
+    groups[groups.length - 1].parts.push(f.bytes);
+    next = f.frameIndex + 1;
+  }
+  return groups.map((g) => {
+    const data = new Uint8Array(g.parts.reduce((n, p) => n + p.length, 0));
+    let o = 0;
+    for (const p of g.parts) { data.set(p, o); o += p.length; }
+    return { frameIndex: g.frameIndex, data };
+  });
+}
+
+/**
+ * Drop damaged AAC frames before mpegts.js parses them: first frames whose
+ * length doesn't chain to the next frame (adtsSanitizer.ts), then — where
+ * WebCodecs is available — frames the browser's own decoder rejects
+ * (aacValidator.ts). The validation is asynchronous, so each PES packet is
+ * handed to mpegts.js a few milliseconds later than it would have been, in
+ * order; the frames kept keep their own timestamps.
+ */
+function hookAudio(demuxer: DemuxerLike) {
+  const parse = demuxer.parseADTSAACPayload;
+  if (typeof parse !== 'function') return;
+  let queue: Promise<void> = Promise.resolve();
+  let validator: AacValidator | null | undefined;
+  let dead = false;
+  let droppedTotal = 0;
+  let lastReport = 0;
+
+  const destroy = demuxer.destroy;
+  if (typeof destroy === 'function') {
+    demuxer.destroy = function (this: DemuxerLike) {
+      dead = true;
+      validator?.close();
+      destroy.call(this);
+    };
+  }
+
+  const report = (n: number) => {
+    droppedTotal += n;
+    const now = Date.now();
+    if (now - lastReport > 5000) {
+      lastReport = now;
+      console.info(`[MPEGTS] dropped damaged audio frames (${droppedTotal} so far)`);
+    }
+  };
+
+  const handle = async (data: Uint8Array, pts: number | undefined, validate: boolean) => {
+    if (dead) return;
+    const continuation = !!demuxer.aac_last_incomplete_data_;
+    const check = checkAdtsPayload(data, continuation);
+    if (!check && continuation) { parse.call(demuxer, data, pts); return; }
+    let runs: AdtsRun[] = check ? check.runs : [{ frameIndex: 0, data }];
+    let dropped = check ? check.dropped : 0;
+    const first = runs[0]?.data;
+    if (!first || first.length < 7) { parse.call(demuxer, data, pts); return; }
+    const config = adtsConfig(first, 0);
+
+    if (validator === undefined) validator = config && AacValidator.available() ? new AacValidator(config) : null;
+    if (validate && validator?.enabled) {
+      // Split the runs into frames; validate the complete ones.
+      const frames: { frameIndex: number; bytes: Uint8Array; complete: boolean }[] = [];
+      for (const run of runs) {
+        let o = 0;
+        let idx = run.frameIndex;
+        while (o + 7 <= run.data.length) {
+          const len = ((run.data[o + 3] & 3) << 11) | (run.data[o + 4] << 3) | (run.data[o + 5] >> 5);
+          if (len < 7) break;
+          const complete = o + len <= run.data.length;
+          frames.push({ frameIndex: idx++, bytes: run.data.subarray(o, Math.min(o + len, run.data.length)), complete });
+          if (!complete) break;
+          o += len;
+        }
+      }
+      const complete = frames.filter((f) => f.complete);
+      const verdicts = await validator.check(complete.map((f) => f.bytes.subarray((f.bytes[1] & 1) ? 7 : 9)));
+      if (dead) return;
+      const bad = new Set(complete.filter((_, i) => !verdicts[i]));
+      if (bad.size) {
+        dropped += bad.size;
+        runs = regroup(frames.filter((f) => !bad.has(f)));
+      }
+    }
+
+    if (dropped) report(dropped);
+    if (!check && !dropped) { parse.call(demuxer, data, pts); return; }
+    const frameTicks = config ? (1024 * 90000) / config.sampleRate : 0;
+    for (const run of runs) {
+      parse.call(demuxer, run.data, pts === undefined ? undefined : pts + run.frameIndex * frameTicks);
+    }
+  };
+
+  let pending = 0;
+  const failed = (e: unknown) => { if (!dead) console.warn('[MPEGTS] audio check failed', e); };
+  demuxer.parseADTSAACPayload = (data, pts) => {
+    if (!pending && !demuxer.audio_init_segment_dispatched_) {
+      // Until mpegts.js has set up the audio track, handle packets right
+      // away (structural checks only): delaying the audio init segment makes
+      // Chrome initialise the media pipeline without it.
+      handle(data, pts, false).catch(failed);
+      return;
+    }
+    const copy = data.slice();
+    pending++;
+    queue = queue
+      .then(() => handle(copy, pts, true))
+      // mpegts.js hands parsed samples on at the end of each chunk it reads;
+      // ours arrive after that, so hand them on ourselves.
+      .then(() => { if (!dead) demuxer.dispatchAudioMediaSegment?.(); })
+      .catch(failed)
+      .finally(() => { pending--; });
+  };
 }
 interface ControllerLike {
   _demuxer?: DemuxerLike;
@@ -138,6 +264,7 @@ function hookController(controller: ControllerLike | undefined): boolean {
     const forward = demuxer?.onDataAvailable;
     if (!demuxer || typeof forward !== 'function') return;
 
+    hookAudio(demuxer);
     const fixer = new JoinFixer();
     demuxer.onDataAvailable = (audio, video) => {
       if (video?.samples?.length) {
