@@ -26,6 +26,19 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   opacity: 0; transition: opacity .3s ease;
 }
 #bufferOverlay.show { opacity: 1; }
+.playbackDiagnostics {
+  padding: 12px 16px; margin-bottom: 14px; border-radius: 12px;
+  border: 1px solid var(--line); background: #101720; color: var(--text);
+  font-size: 16px; line-height: 1.4; overflow-wrap: anywhere;
+}
+.playbackDiagnostics.onPlayer {
+  position: fixed; z-index: 8; top: 24px; left: 24px; width: min(600px, calc(100vw - 48px));
+  pointer-events: none; background: rgba(10, 14, 20, .94);
+}
+.playbackDiagnostics h3 { margin: 0 0 6px; font-size: 17px; }
+.playbackDiagnostics ul { margin: 0; padding-left: 20px; }
+.playbackDiagnostics p { margin: 0; }
+.playbackDiagnostics .error { color: #ffaaa3; }
 .bufferSpin {
   width: 56px; height: 56px;
   border: 3px solid rgba(255, 255, 255, .08);
@@ -361,6 +374,7 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
 }
 .toggleRow .tLabel { font-size: 17px; font-weight: 600; }
 .toggleRow .tDesc { font-size: 13px; color: var(--muted); margin-top: 3px; }
+.toggleRow.debugToggle { margin-bottom: 14px; }
 /* Depends on another option that's off: still focusable, but inert. */
 .toggleRow.disabled { cursor: default; }
 .toggleRow.disabled .tLabel, .toggleRow.disabled .toggle { opacity: .4; }

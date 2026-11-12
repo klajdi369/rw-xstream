@@ -2,6 +2,7 @@ import React from 'react';
 import { Hud } from './components/Hud';
 import { EpgGuide } from './components/EpgGuide';
 import { OrderPrompt } from './components/OrderPrompt';
+import { PlaybackDiagnostics } from './components/PlaybackDiagnostics';
 import { SettingsOverlay } from './components/SettingsOverlay';
 import { Sidebar } from './components/Sidebar';
 import { useChannelOrder } from './hooks/useChannelOrder';
@@ -9,6 +10,7 @@ import { useEpg } from './hooks/useEpg';
 import { useHud } from './hooks/useHud';
 import { useKeyIndicator } from './hooks/useKeyIndicator';
 import { usePlayback } from './hooks/usePlayback';
+import { diagnosticErrorName, usePlaybackDiagnostics } from './hooks/usePlaybackDiagnostics';
 import { useProxyMemory } from './hooks/useProxyMemory';
 import { useToast } from './hooks/useToast';
 import { Category, Channel, LastChannel } from './types/player';
@@ -32,6 +34,15 @@ function providerApiUrl({ server, user, pass }: Credentials, params: Record<stri
   url.searchParams.set('password', pass);
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
   return url.toString();
+}
+
+function describeApiError(error: unknown) {
+  const message = (error as Error | null)?.message;
+  if (message && /^HTTP [1-5]\d\d$/.test(message)) return message;
+  const name = diagnosticErrorName(error);
+  if (name === 'TypeError') return 'Network request failed';
+  if (name === 'SyntaxError') return 'Invalid JSON response';
+  return name;
 }
 
 export default function App() {
@@ -136,6 +147,7 @@ export default function App() {
   const { hudTitle, setHudTitle, hudSub, setHudSub, hudHidden, wakeHud } = useHud({ sidebarOpen, settingsOpen });
   const { channelToast, showToast } = useToast();
   const { keyIndicator, showKeyIndicator } = useKeyIndicator();
+  const { enabled: debugPlayback, entries: diagnostics, setDebugEnabled, reportDiagnostic } = usePlaybackDiagnostics();
   const {
     channelOrderMap,
     customOrderInList,
@@ -153,13 +165,18 @@ export default function App() {
     providerApiUrl(credentials, params)
   ), [credentials]);
 
-  const jget = React.useCallback(async (url: string): Promise<unknown> => {
+  const jget = React.useCallback(async (url: string, diagnosticStage?: string): Promise<unknown> => {
     // Fetch the Server URL (player_api.php) straight from the client first.
     try {
       const r = await fetch(url);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return await r.json();
     } catch (directErr) {
+      if (diagnosticStage) {
+        const mixedContent = window.location.protocol === 'https:' && /^http:/i.test(url);
+        const hint = mixedContent ? ' (HTTP from an HTTPS page)' : '';
+        reportDiagnostic(`${diagnosticStage} · Direct · ${describeApiError(directErr)}${hint}`, 'error');
+      }
       // A direct client fetch of the Server URL can fail for CORS, TLS/mixed
       // content, DNS, or transient network reasons. When it does, route just
       // this one API request through our own server's proxy and try again.
@@ -169,14 +186,17 @@ export default function App() {
         const proxied = `${backendBaseRef.current}/proxy?url=${encodeURIComponent(url)}&deint=0`;
         const r = await fetch(proxied, { cache: 'no-store' });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return await r.json();
-      } catch {
+        const result = await r.json();
+        if (diagnosticStage) reportDiagnostic(`${diagnosticStage} · Proxy succeeded`);
+        return result;
+      } catch (proxyErr) {
+        if (diagnosticStage) reportDiagnostic(`${diagnosticStage} · Proxy · ${describeApiError(proxyErr)}`, 'error');
         // Surface the original client-side failure — it's the more meaningful
         // one to show the user when even the proxy fallback couldn't recover.
         throw directErr;
       }
     }
-  }, []);
+  }, [reportDiagnostic]);
 
   // ── EPG ───────────────────────────────────────────────────────────────────────
   const { epg, fetchEpg, clearEpg, stopEpgRefresh, loadSchedule } = useEpg({
@@ -198,6 +218,7 @@ export default function App() {
     useProxy,
     rememberProxyMode,
     checkVideo,
+    reportDiagnostic,
     remember,
     fetchEpg,
     clearEpg,
@@ -239,7 +260,7 @@ export default function App() {
     let list = cache.get(id);
     if (!list) {
       try {
-        const data = await jget(requestUrl({ action: 'get_live_streams', category_id: id }));
+        const data = await jget(requestUrl({ action: 'get_live_streams', category_id: id }), 'Channel list');
         list = Array.isArray(data) ? (data as Channel[]) : [];
         list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
         cache.set(id, list);
@@ -257,6 +278,7 @@ export default function App() {
     }
 
     if (cacheRef.current !== cache || activeCatRef.current !== id) return;
+    if (!list.length && !query) reportDiagnostic('Provider returned no channels in this category.', 'error');
     const q = query.trim().toLowerCase();
     const visible = q ? list.filter((c) => String(c.name || '').toLowerCase().includes(q)) : list;
     setChannels(visible);
@@ -265,7 +287,7 @@ export default function App() {
     setHudTitle(cat.category_name || 'Channels');
     setHudSub(`${visible.length} channels`);
     wakeHud();
-  }, [apiUrl, chQuery, jget, setHudSub, setHudTitle, wakeHud]);
+  }, [apiUrl, chQuery, jget, reportDiagnostic, setHudSub, setHudTitle, wakeHud]);
 
   // Remember the category the user explicitly picked, so the next startup opens
   // it — even while the category list itself stays hidden (HIDE_CATEGORIES).
@@ -278,12 +300,14 @@ export default function App() {
     if (connectingRef.current) return;
     const next = draftCredentials;
     if (!next.server.trim() || !next.user.trim() || !next.pass) {
+      reportDiagnostic('Sign-in requires a server URL, username, and password.', 'error');
       setMsg('Fill all fields');
       setMsgIsError(true);
       return;
     }
 
     connectingRef.current = true;
+    let stage = 'Sign-in';
     try {
       setConnecting(true);
       setConnectMsg('Connecting…');
@@ -291,21 +315,28 @@ export default function App() {
       setMsg('Connecting…');
       setMsgIsError(false);
       setSettingsProgress(10);
+      reportDiagnostic('Signing in to the provider…');
 
       const requestUrl = (params: Record<string, string>) => providerApiUrl(next, params);
-      const auth = await jget(requestUrl({})) as Record<string, unknown>;
-      if (!(auth?.user_info as Record<string, unknown>)?.auth) throw new Error('Auth failed');
+      const auth = await jget(requestUrl({}), stage) as Record<string, unknown>;
+      const authorized = (auth?.user_info as Record<string, unknown>)?.auth;
+      if (!authorized || authorized === '0') throw new Error('Auth failed');
 
+      stage = 'Categories';
       setConnectMsg('Loading categories…');
       setConnectProgress(45);
       setSettingsProgress(45);
 
-      const raw = await jget(requestUrl({ action: 'get_live_categories' }));
+      const raw = await jget(requestUrl({ action: 'get_live_categories' }), stage);
       const all = (Array.isArray(raw) ? raw : []) as Category[];
       all.sort((a, b) => Number(a.category_id) - Number(b.category_id));
       const filtered = all.filter((c) => String(c.category_name || '').toUpperCase().includes('ALBANIA'));
       const scopedCategories = HIDE_CATEGORIES ? filtered.slice(0, 1) : filtered;
+      if (!filtered.length) {
+        reportDiagnostic(all.length ? 'No categories matched the Albania filter.' : 'Provider returned no live categories.', 'error');
+      }
 
+      stage = 'Saving connection';
       const accountChanged = normServer(next.server) !== normServer(server) || next.user !== user || next.pass !== pass;
       if (accountChanged) {
         localStorage.removeItem(LAST_KEY);
@@ -341,6 +372,7 @@ export default function App() {
       setCatQuery('');
       setChQuery('');
 
+      stage = 'Channel list';
       setConnectMsg('Loading channels…');
       setConnectProgress(70);
       setSettingsProgress(70);
@@ -385,6 +417,9 @@ export default function App() {
       setHudSub('OK to open channel list');
       wakeHud();
     } catch (e: unknown) {
+      reportDiagnostic((e as Error | null)?.message === 'Auth failed'
+        ? 'Sign-in rejected by the provider.'
+        : `${stage} failed (${diagnosticErrorName(e)}).`, 'error');
       const errMsg = `Failed: ${(e as Error)?.message || String(e)}`;
       setMsg(errMsg);
       setMsgIsError(true);
@@ -395,7 +430,7 @@ export default function App() {
       setConnecting(false);
       setConnectProgress(0);
     }
-  }, [checkVideo, draftCredentials, epgUrl, fmt, jget, loadCategory, pass, playChannel, remember, rememberProxyMode, resetPlayback, server, setHudSub, setHudTitle, showAllCategories, useProxy, user, wakeHud]);
+  }, [checkVideo, draftCredentials, epgUrl, fmt, jget, loadCategory, pass, playChannel, remember, rememberProxyMode, reportDiagnostic, resetPlayback, server, setHudSub, setHudTitle, showAllCategories, useProxy, user, wakeHud]);
 
   // ── Init from localStorage ────────────────────────────────────────────────────
   React.useEffect(() => {
@@ -836,6 +871,7 @@ export default function App() {
       <div id="bufferOverlay" className={buffering ? 'show' : ''}>
         <div className="bufferSpin" />
       </div>
+      {debugPlayback && !settingsOpen && !sidebarOpen && !epgGuideOpen && <PlaybackDiagnostics entries={diagnostics} onPlayer />}
 
       <div id="resumeBadge" className={resumeLabel ? 'show' : ''}>{resumeLabel}</div>
 
@@ -924,10 +960,13 @@ export default function App() {
         useProxy={useProxy}
         rememberProxyMode={rememberProxyMode}
         checkVideo={checkVideo}
+        debugPlayback={debugPlayback}
+        diagnostics={diagnostics}
         message={msg}
         isError={msgIsError}
         progress={settingsProgress}
         onChange={(patch) => {
+          if (patch.debugPlayback !== undefined) setDebugEnabled(patch.debugPlayback);
           if (patch.fmt !== undefined) setFmt(patch.fmt);
           if (patch.epgUrl !== undefined) setEpgUrl(patch.epgUrl);
           if (patch.remember !== undefined) setRemember(patch.remember);
