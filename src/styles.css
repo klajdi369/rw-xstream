@@ -39,6 +39,13 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
 .playbackDiagnostics ul { margin: 0; padding-left: 20px; }
 .playbackDiagnostics p { margin: 0; }
 .playbackDiagnostics .error { color: #ffaaa3; }
+.diagnosticTime { display: inline-block; min-width: 58px; margin-right: 6px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.playbackDebugReport textarea {
+  display: block; width: 100%; height: min(52vh, 460px); resize: none; padding: 14px;
+  border: 1px solid var(--line); border-radius: 10px; background: #101720; color: var(--text);
+  font: 15px/1.5 ui-monospace, monospace;
+}
+.playbackDebugReport textarea:focus { outline: 2px solid var(--foc); outline-offset: 2px; }
 .bufferSpin {
   width: 56px; height: 56px;
   border: 3px solid rgba(255, 255, 255, .08);

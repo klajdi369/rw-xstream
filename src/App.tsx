@@ -147,7 +147,7 @@ export default function App() {
   const { hudTitle, setHudTitle, hudSub, setHudSub, hudHidden, wakeHud } = useHud({ sidebarOpen, settingsOpen });
   const { channelToast, showToast } = useToast();
   const { keyIndicator, showKeyIndicator } = useKeyIndicator();
-  const { enabled: debugPlayback, entries: diagnostics, setDebugEnabled, reportDiagnostic } = usePlaybackDiagnostics();
+  const { enabled: debugPlayback, entries: diagnostics, environment: diagnosticEnvironment, setDebugEnabled, reportDiagnostic } = usePlaybackDiagnostics();
   const {
     channelOrderMap,
     customOrderInList,
@@ -166,37 +166,45 @@ export default function App() {
   ), [credentials]);
 
   const jget = React.useCallback(async (url: string, diagnosticStage?: string): Promise<unknown> => {
-    // Fetch the Server URL (player_api.php) straight from the client first.
-    try {
-      const r = await fetch(url);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return await r.json();
-    } catch (directErr) {
-      if (diagnosticStage) {
-        const mixedContent = window.location.protocol === 'https:' && /^http:/i.test(url);
-        const hint = mixedContent ? ' (HTTP from an HTTPS page)' : '';
-        reportDiagnostic(`${diagnosticStage} · Direct · ${describeApiError(directErr)}${hint}`, 'error');
+    const getJson = async (target: string, route: 'Direct' | 'Proxy') => {
+      const stage = debugPlayback && diagnosticStage ? `${diagnosticStage} · ${route}` : '';
+      const startedAt = performance.now();
+      const elapsed = () => `${Math.round(performance.now() - startedAt)}ms`;
+      const timer = stage ? window.setTimeout(() => {
+        reportDiagnostic(`${stage} · Still waiting after ${elapsed()}.`, 'error');
+      }, 10000) : undefined;
+      try {
+        const response = await fetch(target, route === 'Proxy' ? { cache: 'no-store' } : undefined);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const result = await response.json();
+        if (stage) {
+          reportDiagnostic(`${stage} · HTTP ${response.status} · JSON received in ${elapsed()}${response.redirected ? ' after a redirect' : ''}.`);
+        }
+        return result;
+      } catch (error) {
+        if (stage) {
+          const mixedContent = route === 'Direct' && window.location.protocol === 'https:' && /^http:/i.test(target);
+          const hint = mixedContent ? ' · HTTP from an HTTPS page' : '';
+          reportDiagnostic(`${stage} · ${describeApiError(error)} · ${elapsed()}${hint}`, 'error');
+        }
+        throw error;
+      } finally {
+        if (timer !== undefined) window.clearTimeout(timer);
       }
-      // A direct client fetch of the Server URL can fail for CORS, TLS/mixed
-      // content, DNS, or transient network reasons. When it does, route just
-      // this one API request through our own server's proxy and try again.
-      // This fallback is scoped to the Server URL only — streams and every
-      // other request keep their existing behaviour (nothing new is proxied).
+    };
+
+    try {
+      return await getJson(url, 'Direct');
+    } catch (directErr) {
+      // The provider API can fall back to our proxy when the TV cannot reach it directly.
       try {
         const proxied = `${backendBaseRef.current}/proxy?url=${encodeURIComponent(url)}&deint=0`;
-        const r = await fetch(proxied, { cache: 'no-store' });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const result = await r.json();
-        if (diagnosticStage) reportDiagnostic(`${diagnosticStage} · Proxy succeeded`);
-        return result;
-      } catch (proxyErr) {
-        if (diagnosticStage) reportDiagnostic(`${diagnosticStage} · Proxy · ${describeApiError(proxyErr)}`, 'error');
-        // Surface the original client-side failure — it's the more meaningful
-        // one to show the user when even the proxy fallback couldn't recover.
+        return await getJson(proxied, 'Proxy');
+      } catch {
         throw directErr;
       }
     }
-  }, [reportDiagnostic]);
+  }, [debugPlayback, reportDiagnostic]);
 
   // ── EPG ───────────────────────────────────────────────────────────────────────
   const { epg, fetchEpg, clearEpg, stopEpgRefresh, loadSchedule } = useEpg({
@@ -218,6 +226,7 @@ export default function App() {
     useProxy,
     rememberProxyMode,
     checkVideo,
+    debugPlayback,
     reportDiagnostic,
     remember,
     fetchEpg,
@@ -264,6 +273,9 @@ export default function App() {
         list = Array.isArray(data) ? (data as Channel[]) : [];
         list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
         cache.set(id, list);
+        if (list.length && cacheRef.current === cache && activeCatRef.current === id) {
+          reportDiagnostic(`Channel list · ${list.length} live channels received.`);
+        }
       } catch (e) {
         if (cacheRef.current !== cache || activeCatRef.current !== id) return;
         // Don't leave the failure as an unhandled rejection — tell the user the
@@ -321,6 +333,7 @@ export default function App() {
       const auth = await jget(requestUrl({}), stage) as Record<string, unknown>;
       const authorized = (auth?.user_info as Record<string, unknown>)?.auth;
       if (!authorized || authorized === '0') throw new Error('Auth failed');
+      reportDiagnostic('Provider accepted sign-in.');
 
       stage = 'Categories';
       setConnectMsg('Loading categories…');
@@ -334,6 +347,8 @@ export default function App() {
       const scopedCategories = HIDE_CATEGORIES ? filtered.slice(0, 1) : filtered;
       if (!filtered.length) {
         reportDiagnostic(all.length ? 'No categories matched the Albania filter.' : 'Provider returned no live categories.', 'error');
+      } else {
+        reportDiagnostic(`Categories · ${filtered.length} of ${all.length} matched the Albania filter.`);
       }
 
       stage = 'Saving connection';
@@ -962,6 +977,7 @@ export default function App() {
         checkVideo={checkVideo}
         debugPlayback={debugPlayback}
         diagnostics={diagnostics}
+        diagnosticEnvironment={diagnosticEnvironment}
         message={msg}
         isError={msgIsError}
         progress={settingsProgress}

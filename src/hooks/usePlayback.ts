@@ -8,6 +8,7 @@ import { CHANNEL_PROXY_MAX_VISITS, LAST_KEY } from '../constants';
 import { ProxyMemoryMap } from './useProxyMemory';
 import { diagnosticErrorName, diagnosticHttpStatus } from './usePlaybackDiagnostics';
 import type { ReportDiagnostic } from './usePlaybackDiagnostics';
+import { describeMediaState, describeStreamTracks, observeMediaMilestones, observeMpegtsDiagnostics } from '../player/playbackDiagnostics';
 import { installJoinFix } from '../player/mpegtsJoinFix';
 
 type StreamFormat = 'm3u8' | 'ts';
@@ -33,6 +34,7 @@ interface UsePlaybackOptions {
   rememberProxyMode: boolean;
   /** Validate video frames with WebCodecs and skip damaged ones (extra CPU). */
   checkVideo: boolean;
+  debugPlayback: boolean;
   reportDiagnostic: ReportDiagnostic;
   remember: boolean;
   fetchEpg: (id: string | number, epgChannelId?: string | null, channelName?: string) => Promise<void>;
@@ -56,6 +58,7 @@ export function usePlayback({
   useProxy,
   rememberProxyMode,
   checkVideo,
+  debugPlayback,
   reportDiagnostic,
   remember,
   fetchEpg,
@@ -133,6 +136,10 @@ export function usePlayback({
       ? reorderAttempts(attemptOrder)
       : attemptOrder.filter((a) => !a.viaProxy && !a.viaTranscode);
 
+    if (debugPlayback) {
+      reportDiagnostic(`Tune requested · ${preferredFmt === 'ts' ? 'MPEG-TS' : 'HLS'} · proxy ${useProxy ? 'on' : 'off'} · frame checking ${checkVideo && preferredFmt === 'ts' ? 'on' : 'off'} · ${attempts.length} playback route${attempts.length === 1 ? '' : 's'}.`);
+    }
+
     const rememberChannelPlaybackMode = (loadedThroughProxy: boolean) => {
       if (!rememberProxyMode) return;
       const memory = readChannelProxyMemory();
@@ -166,6 +173,7 @@ export function usePlayback({
     // Reconnects in a row because the stream arrived slower than real time
     // (see the TS branch); capped so a channel slow everywhere still plays.
     let slowReconnects = 0;
+    let attemptNumber = 0;
 
     const startAttempt = async (index: number, retry = 0) => {
       if (playToken !== playTokenRef.current) return;
@@ -199,8 +207,9 @@ export function usePlayback({
       // "Proxy + FFMPEG" to make clear it too came from the proxy, not direct.
       const viaServer = attempt.viaProxy || attempt.viaTranscode;
       const modeLabel = `${attempt.playAs.toUpperCase()}${viaServer ? ' + Proxy' : ''}${attempt.viaTranscode ? ' + FFMPEG' : ''}`;
-      const reportAttempt: ReportDiagnostic = (message, level) => reportDiagnostic(`${modeLabel} · ${message}`, level);
-      reportAttempt(viaServer ? 'Starting proxy playback' : 'Starting direct playback');
+      const attemptLabel = `Attempt ${++attemptNumber} · ${modeLabel}`;
+      const reportAttempt: ReportDiagnostic = (message, level) => reportDiagnostic(`${attemptLabel} · ${message}`, level);
+      reportAttempt(`Starting ${viaServer ? 'proxy' : 'direct'} playback${retry ? ' (retry)' : ''}.`);
       if (!viaServer && window.location.protocol === 'https:' && /^http:/i.test(url)) {
         reportAttempt('The browser may block an HTTP stream on an HTTPS page.');
       }
@@ -215,11 +224,16 @@ export function usePlayback({
       let blackGuard: ReturnType<typeof window.setTimeout> | null = null;
       // Some TV browsers never emit canplay or error for unsupported sources.
       const noProgressMs = attempt.viaTranscode ? 25000 : 15000;
-      const diagnosticTimer = window.setTimeout(() => {
+      const diagnosticTimer = debugPlayback ? window.setTimeout(() => {
         if (!settled && playToken === playTokenRef.current) {
-          reportAttempt(`No playback after ${noProgressMs / 1000}s (media readyState ${v.readyState}).`, 'error');
+          reportAttempt(`No playback after ${noProgressMs / 1000}s (${describeMediaState(v)}).`, 'error');
         }
-      }, noProgressMs);
+      }, noProgressMs) : undefined;
+      const progressTimer = debugPlayback ? window.setTimeout(() => {
+        if (!settled && playToken === playTokenRef.current) {
+          reportAttempt(`Startup at 3s (${describeMediaState(v)}).`);
+        }
+      }, 3000) : undefined;
 
       const clearBlackGuard = () => {
         if (blackGuard !== null) {
@@ -232,7 +246,7 @@ export function usePlayback({
       // retrying segments (and holding the provider connection) in the
       // background, and tell the user why.
       const giveUp = (reason?: string) => {
-        reportAttempt('Playback stopped.', 'error');
+        if (debugPlayback) reportAttempt(`Playback stopped (${describeMediaState(v)}).`, 'error');
         console.warn('[Player] giving up', { modeLabel, reason });
         stopPlayback(true);
         resetRememberedPlaybackMode();
@@ -252,6 +266,7 @@ export function usePlayback({
         settled = true;
         clearBlackGuard();
         window.clearTimeout(diagnosticTimer);
+        window.clearTimeout(progressTimer);
 
         if (attempts[index + 1]) {
           reportAttempt('Trying another playback route.');
@@ -283,6 +298,7 @@ export function usePlayback({
           return;
         }
         console.warn('[Player] stream error while playing — reconnecting', { modeLabel, reason });
+        if (debugPlayback) reportAttempt(`Playback interrupted. Reconnecting (${describeMediaState(v)}).`, 'error');
         setHudSub(`${modeLabel} stream glitch — reconnecting…`);
         setBuffering(true);
         wakeHud();
@@ -311,9 +327,12 @@ export function usePlayback({
         fallback(describeMediaError(), v.error?.code !== 4);
       };
       v.addEventListener('error', onMediaError);
+      const stopMediaDiagnostics = debugPlayback ? observeMediaMilestones(v, reportAttempt) : undefined;
       detachMediaRef.current = () => {
         v.removeEventListener('error', onMediaError);
+        stopMediaDiagnostics?.();
         window.clearTimeout(diagnosticTimer);
+        window.clearTimeout(progressTimer);
       };
 
       // A rejected play() is not by itself a broken stream: it's rejected
@@ -328,6 +347,7 @@ export function usePlayback({
           console.warn('[Player] play() rejected', err?.name, err?.message);
           if (err?.name !== 'AbortError') reportAttempt(`Browser rejected play() (${diagnosticErrorName(e)}).`, 'error');
           if (err?.name === 'NotAllowedError' && !v.muted) {
+            reportAttempt('Autoplay with sound was blocked. Trying muted playback.');
             // Autoplay with sound blocked — play muted rather than not at all.
             v.muted = true;
             const unmute = () => {
@@ -378,6 +398,7 @@ export function usePlayback({
             playingSince = Date.now();
             clearBlackGuard();
             window.clearTimeout(diagnosticTimer);
+            window.clearTimeout(progressTimer);
             reportAttempt(v.videoWidth && v.videoHeight
               ? `Video started (${v.videoWidth} × ${v.videoHeight}).`
               : 'Playback started without reported video dimensions.');
@@ -387,7 +408,7 @@ export function usePlayback({
           }
 
           if (Date.now() - startedAt >= maxWaitMs) {
-            reportAttempt(`No video or audio progress (media readyState ${v.readyState}).`, 'error');
+            if (debugPlayback) reportAttempt(`No video or audio progress (${describeMediaState(v)}).`, 'error');
             fallback();
             return;
           }
@@ -403,6 +424,13 @@ export function usePlayback({
         reportAttempt('Using HLS.js (Media Source).');
         const hls = new Hls({ lowLatencyMode: true, maxBufferLength: 10, maxMaxBufferLength: 30 });
         hlsRef.current = hls;
+        if (debugPlayback) {
+          hls.once(Hls.Events.FRAG_LOADED, (_, data) => {
+            if (playToken !== playTokenRef.current || hlsRef.current !== hls) return;
+            reportAttempt(`HLS first segment received · ${Math.round(data.payload.byteLength / 1024)} KB.`);
+          });
+        }
+        let playlistReported = false;
         // Xtream panels answer an offline channel with a normal-looking
         // playlist whose only segment is a placeholder clip (`/video/black.ts`).
         // No fallback can do better — the proxy or FFmpeg would just play the
@@ -410,6 +438,10 @@ export function usePlayback({
         hls.on(Hls.Events.LEVEL_LOADED, (_: unknown, data: { details?: { fragments?: { url?: string }[] } }) => {
           if (settled || playToken !== playTokenRef.current) return;
           const frags = data?.details?.fragments || [];
+          if (debugPlayback && !playlistReported) {
+            playlistReported = true;
+            reportAttempt(`HLS media playlist received · ${frags.length} segments.`);
+          }
           const isPlaceholder = (u = '') => {
             let decoded = u;
             try { decoded = decodeURIComponent(u); } catch { /* keep raw */ }
@@ -423,8 +455,12 @@ export function usePlayback({
             giveUp('channel is offline (provider placeholder)');
           }
         });
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
           if (settled || playToken !== playTokenRef.current) return;
+          if (debugPlayback) {
+            const level = data.levels[data.firstLevel] || data.levels[0];
+            reportAttempt(`HLS manifest parsed · ${data.levels.length} variants${level ? ` · ${describeStreamTracks(level)}` : ''}.`);
+          }
           setHudSub(`▶ Live (${modeLabel})`);
           startPlaying();
           armBlackGuard();
@@ -435,7 +471,7 @@ export function usePlayback({
           if (playToken !== playTokenRef.current) return;
           console.warn('[HLS][error]', d?.type, d?.details, d?.fatal);
           const status = diagnosticHttpStatus(d?.response?.code);
-          reportAttempt([`HLS ${d.details || d.type}`, status || (d.response?.code === 0 ? 'no HTTP response' : '')].filter(Boolean).join(' · '), 'error');
+          reportAttempt([`HLS ${d.details || d.type}`, status || (d.response?.code === 0 ? 'no HTTP response' : ''), d.fatal ? 'fatal' : 'recoverable'].filter(Boolean).join(' · '), 'error');
           if (d?.fatal) {
             fallback();
             return;
@@ -472,7 +508,8 @@ export function usePlayback({
         return;
       }
 
-      if (attempt.playAs === 'ts' && mpegts.getFeatureList().mseLivePlayback) {
+      const tsFeatures = attempt.playAs === 'ts' ? mpegts.getFeatureList() : null;
+      if (tsFeatures?.mseLivePlayback) {
         reportAttempt('Using MPEG-TS via Media Source.');
         const p = mpegts.createPlayer(
           { type: 'mpegts', isLive: true, url },
@@ -484,6 +521,7 @@ export function usePlayback({
         // The check is for the provider's stream as is; the proxy's ffmpeg
         // re-encodes it into a clean one, so checking that only costs CPU.
         installJoinFix(p, { checkVideo: checkVideo && !viaServer });
+        if (debugPlayback) observeMpegtsDiagnostics(p, reportAttempt, () => playToken === playTokenRef.current && mtsRef.current === p);
         p.on(mpegts.Events.ERROR, (t: unknown, d: unknown, info: unknown) => {
           if (playToken !== playTokenRef.current) return;
           console.warn('[MPEGTS][error]', t, d, info);
@@ -495,7 +533,9 @@ export function usePlayback({
           const detail = Object.values(mpegts.ErrorDetails).find((value) => value === d)
             || Object.values(mpegts.ErrorTypes).find((value) => value === t) || 'stream error';
           const status = diagnosticHttpStatus(errorInfo?.code) || msg?.match(/^HTTP [1-5]\d\d\b/)?.[0];
-          reportAttempt(status ? `MPEG-TS ${detail} · ${status}` : `MPEG-TS ${detail}`, 'error');
+          const networkDetail = status || (/stream ended/i.test(msg || '') ? 'stream closed'
+            : /failed to fetch|network ?error|load failed/i.test(msg || '') ? 'request failed before an HTTP response' : '');
+          reportAttempt(networkDetail ? `MPEG-TS ${detail} · ${networkDetail}` : `MPEG-TS ${detail}`, 'error');
           const reason = msg ? `${String(d)}: ${msg}` : String(d || t || 'stream error');
           if (playing) {
             recoverWhilePlaying(reason);
@@ -598,6 +638,11 @@ export function usePlayback({
         return;
       }
 
+      if (debugPlayback && tsFeatures) {
+        reportAttempt(tsFeatures.msePlayback
+          ? 'Media Source is available, but streaming network reads are unavailable.'
+          : 'Media Source H.264/AAC playback is unavailable.');
+      }
       const mimeType = attempt.playAs === 'm3u8' ? 'application/vnd.apple.mpegurl' : 'video/mp2t';
       reportAttempt(v.canPlayType(mimeType)
         ? 'Using native browser playback.'
@@ -627,6 +672,7 @@ export function usePlayback({
     remember,
     rememberProxyMode,
     checkVideo,
+    debugPlayback,
     reportDiagnostic,
     server,
     setHudSub,

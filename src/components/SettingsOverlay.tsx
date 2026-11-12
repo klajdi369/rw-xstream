@@ -3,7 +3,7 @@ import { PROFILE_KEY_PREFIX, readConnectionProfiles } from '../connectionProfile
 import type { Credentials } from '../connectionProfiles';
 import { clamp, normServer } from '../utils';
 import type { DiagnosticEntry } from '../hooks/usePlaybackDiagnostics';
-import { PlaybackDiagnostics } from './PlaybackDiagnostics';
+import { PlaybackDebugReport, PlaybackDiagnostics } from './PlaybackDiagnostics';
 
 type PlaybackSettings = {
   fmt: string;
@@ -20,6 +20,7 @@ type Props = PlaybackSettings & {
   connecting: boolean;
   credentials: Credentials;
   diagnostics: DiagnosticEntry[];
+  diagnosticEnvironment: string[];
   message: string;
   isError?: boolean;
   progress?: number;
@@ -51,16 +52,21 @@ enum Row {
   Debug,
   Connect,
   Clear,
+  DebugReport,
 }
 
 export function SettingsOverlay(props: Props) {
   const {
-    open, connecting, credentials, fmt, epgUrl, remember, useProxy, rememberProxyMode, checkVideo, debugPlayback, diagnostics,
+    open, connecting, credentials, fmt, epgUrl, remember, useProxy, rememberProxyMode, checkVideo, debugPlayback,
+    diagnostics, diagnosticEnvironment,
     message, isError, progress, onChange, onCredentialsChange, onConnect, onClear, onClose,
   } = props;
 
   const { server, user, pass } = credentials;
   const [sel, setSel] = React.useState(Row.Server);
+  const [reportOpen, setReportOpen] = React.useState(false);
+  const showReport = open && debugPlayback && reportOpen;
+  const lastRow = debugPlayback ? Row.DebugReport : Row.Clear;
   const [profiles, setProfiles] = React.useState(readConnectionProfiles);
   const [selectedName, setSelectedName] = React.useState('');
   const [profileName, setProfileName] = React.useState('');
@@ -84,7 +90,7 @@ export function SettingsOverlay(props: Props) {
     setProfiles(savedProfiles);
     setSel(savedProfiles.length ? Row.Profiles : Row.Server);
     setProfileStatus({ text: '', error: false });
-    cardRef.current?.focus({ preventScroll: true });
+    setReportOpen(false);
 
     const syncProfiles = (event: StorageEvent) => {
       if (event.key === null || event.key.startsWith(PROFILE_KEY_PREFIX)) {
@@ -94,6 +100,10 @@ export function SettingsOverlay(props: Props) {
     window.addEventListener('storage', syncProfiles);
     return () => window.removeEventListener('storage', syncProfiles);
   }, [open]);
+
+  React.useLayoutEffect(() => {
+    if (open && !showReport) cardRef.current?.focus({ preventScroll: true });
+  }, [open, showReport]);
 
   const saveProfile = () => {
     const name = profileName.trim();
@@ -142,30 +152,30 @@ export function SettingsOverlay(props: Props) {
 
   // Keep the highlighted row in view as it moves.
   React.useEffect(() => {
-    if (!open) return;
+    if (!open || showReport) return;
     cardRef.current?.querySelector(`[data-sel="${sel}"]`)?.scrollIntoView({ block: 'nearest' });
-  }, [sel, open]);
+  }, [sel, open, showReport, debugPlayback]);
 
   // The listener reads the latest state through a ref and stays registered
   // for as long as the panel is open. Re-registering it on every render lost
   // keys: App re-renders in the middle of a keydown (its key indicator), and a
   // listener removed and re-added during an event never sees that event — so
   // OK on a toggle row did nothing.
-  const latest = React.useRef({ sel, onClose });
-  latest.current = { sel, onClose };
+  const latest = React.useRef({ sel, lastRow, onClose });
+  latest.current = { sel, lastRow, onClose };
 
   React.useEffect(() => {
-    if (!open) return;
+    if (!open || showReport) return;
     const onKey = (e: KeyboardEvent) => {
       // While a field is focused for typing, its own onKeyDown handles exit keys.
       if (e.defaultPrevented) return;
       const target = e.target;
       if (target instanceof HTMLElement && (target.matches('input, textarea, select') || target.isContentEditable)) return;
 
-      const { sel: current, onClose: close } = latest.current;
+      const { sel: current, lastRow: end, onClose: close } = latest.current;
       if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); close(); return; }
-      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); setSel((v) => clamp(v + 1, Row.Profiles, Row.Clear)); return; }
-      if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); setSel((v) => clamp(v - 1, Row.Profiles, Row.Clear)); return; }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); setSel((v) => clamp(v + 1, Row.Profiles, end)); return; }
+      if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); setSel((v) => clamp(v - 1, Row.Profiles, end)); return; }
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         const row = cardRef.current?.querySelector<HTMLElement>(`[data-sel="${current}"]`);
@@ -176,17 +186,27 @@ export function SettingsOverlay(props: Props) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open]);
+  }, [open, showReport]);
 
   // Inside a text field: leave back to row navigation without the field
   // swallowing the keystroke.
   const fieldKey = (e: React.KeyboardEvent<HTMLInputElement>, row: Row) => {
     if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); e.currentTarget.blur(); }
-    else if (e.key === 'ArrowDown') { e.preventDefault(); e.currentTarget.blur(); setSel(clamp(row + 1, Row.Profiles, Row.Clear)); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); e.currentTarget.blur(); setSel(clamp(row - 1, Row.Profiles, Row.Clear)); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); e.currentTarget.blur(); setSel(clamp(row + 1, Row.Profiles, lastRow)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); e.currentTarget.blur(); setSel(clamp(row - 1, Row.Profiles, lastRow)); }
   };
 
   const selClass = (row: Row) => (sel === row ? 'setSel' : '');
+
+  if (showReport) {
+    return (
+      <div id="settingsOverlay" className="show">
+        <div id="settingsCard">
+          <PlaybackDebugReport entries={diagnostics} environment={diagnosticEnvironment} onBack={() => setReportOpen(false)} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div id="settingsOverlay" className={open ? 'show' : ''}>
@@ -320,6 +340,10 @@ export function SettingsOverlay(props: Props) {
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <button className={`btn btnP ${selClass(Row.Connect)}`} data-sel={Row.Connect} disabled={connecting} onClick={onConnect}>Connect</button>
             <button className={`btn btnD ${selClass(Row.Clear)}`} data-sel={Row.Clear} disabled={connecting} onClick={onClear}>Clear Last Connection</button>
+            {debugPlayback && (
+              <button className={`btn ${selClass(Row.DebugReport)}`} data-sel={Row.DebugReport}
+                onClick={() => { setSel(Row.DebugReport); setReportOpen(true); }}>View debug report</button>
+            )}
           </div>
           {message && <div className={`msg ${isError ? 'err' : 'ok'}`}>{message}</div>}
         </div>
