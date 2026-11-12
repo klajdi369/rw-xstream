@@ -13,6 +13,7 @@ import { useProxyMemory } from './hooks/useProxyMemory';
 import { useToast } from './hooks/useToast';
 import { Category, Channel, LastChannel } from './types/player';
 import { isGuideToggle } from './epg/remote';
+import type { Credentials } from './connectionProfiles';
 import {
   CATEGORY_UNLOCK_PRESS_COUNT,
   CATEGORY_UNLOCK_WINDOW_MS,
@@ -24,6 +25,14 @@ import {
   SAVE_KEY,
 } from './constants';
 import { clamp, normServer } from './utils';
+
+function providerApiUrl({ server, user, pass }: Credentials, params: Record<string, string>) {
+  const url = new URL(`${normServer(server)}/player_api.php`);
+  url.searchParams.set('username', user);
+  url.searchParams.set('password', pass);
+  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
+  return url.toString();
+}
 
 export default function App() {
   const videoRef = React.useRef<HTMLVideoElement>(null);
@@ -57,9 +66,13 @@ export default function App() {
   const [focus, setFocus] = React.useState<'categories' | 'channels'>('channels');
 
   // ── Connection credentials ───────────────────────────────────────────────────
-  const [server, setServer] = React.useState(saved.server ? String(saved.server) : '');
-  const [user, setUser] = React.useState(saved.user ? String(saved.user) : '');
-  const [pass, setPass] = React.useState(saved.pass ? String(saved.pass) : '');
+  const [credentials, setCredentials] = React.useState<Credentials>(() => ({
+    server: saved.server ? String(saved.server) : '',
+    user: saved.user ? String(saved.user) : '',
+    pass: saved.pass ? String(saved.pass) : '',
+  }));
+  const [draftCredentials, setDraftCredentials] = React.useState(credentials);
+  const { server, user, pass } = credentials;
   const [fmt, setFmt] = React.useState(saved.fmt ? String(saved.fmt) : 'ts');
   const [epgUrl, setEpgUrl] = React.useState(
     Object.prototype.hasOwnProperty.call(saved, 'epgUrl') ? String(saved.epgUrl ?? '') : DEFAULT_EPG_URL,
@@ -78,6 +91,7 @@ export default function App() {
 
   // ── Connecting overlay ───────────────────────────────────────────────────────
   const [connecting, setConnecting] = React.useState(false);
+  const connectingRef = React.useRef(false);
   const [connectMsg, setConnectMsg] = React.useState('Connecting…');
   const [connectProgress, setConnectProgress] = React.useState(0);
 
@@ -135,13 +149,9 @@ export default function App() {
   const { readChannelProxyMemory, writeChannelProxyMemory } = useProxyMemory();
 
   // ── API helpers ───────────────────────────────────────────────────────────────
-  const apiUrl = React.useCallback((params: Record<string, string>) => {
-    const u = new URL(`${normServer(server)}/player_api.php`);
-    u.searchParams.set('username', user);
-    u.searchParams.set('password', pass);
-    Object.entries(params).forEach(([k, v]) => u.searchParams.set(k, String(v)));
-    return u.toString();
-  }, [server, user, pass]);
+  const apiUrl = React.useCallback((params: Record<string, string>) => (
+    providerApiUrl(credentials, params)
+  ), [credentials]);
 
   const jget = React.useCallback(async (url: string): Promise<unknown> => {
     // Fetch the Server URL (player_api.php) straight from the client first.
@@ -177,7 +187,7 @@ export default function App() {
   });
 
   // ── Playback ──────────────────────────────────────────────────────────────────
-  const { playingId, buffering, playChannel, stopPlayback } = usePlayback({
+  const { playingId, buffering, playChannel, resetPlayback } = usePlayback({
     videoRef,
     backendBaseRef,
     activeCatRef,
@@ -216,19 +226,25 @@ export default function App() {
   }, [channels, customOrderInList, sortWithCustomOrder]);
 
   // ── Load a category ───────────────────────────────────────────────────────────
-  const loadCategory = React.useCallback(async (cat: Category, resetSel = true) => {
+  const loadCategory = React.useCallback(async (
+    cat: Category,
+    resetSel = true,
+    { requestUrl = apiUrl, query = chQuery } = {},
+  ) => {
     const id = String(cat.category_id);
     activeCatRef.current = id;
     setActiveCatName(cat.category_name || 'Channels');
 
-    let list = cacheRef.current.get(id);
+    const cache = cacheRef.current;
+    let list = cache.get(id);
     if (!list) {
       try {
-        const data = await jget(apiUrl({ action: 'get_live_streams', category_id: id }));
+        const data = await jget(requestUrl({ action: 'get_live_streams', category_id: id }));
         list = Array.isArray(data) ? (data as Channel[]) : [];
         list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
-        cacheRef.current.set(id, list);
+        cache.set(id, list);
       } catch (e) {
+        if (cacheRef.current !== cache || activeCatRef.current !== id) return;
         // Don't leave the failure as an unhandled rejection — tell the user the
         // channel list couldn't load (the Server URL was unreachable even via
         // the proxy fallback) instead of silently showing nothing.
@@ -240,7 +256,8 @@ export default function App() {
       }
     }
 
-    const q = chQuery.trim().toLowerCase();
+    if (cacheRef.current !== cache || activeCatRef.current !== id) return;
+    const q = query.trim().toLowerCase();
     const visible = q ? list.filter((c) => String(c.name || '').toLowerCase().includes(q)) : list;
     setChannels(visible);
     if (resetSel) setSelCh(0);
@@ -258,12 +275,15 @@ export default function App() {
 
   // ── Connect ───────────────────────────────────────────────────────────────────
   const connect = React.useCallback(async () => {
-    if (!server || !user || !pass) {
+    if (connectingRef.current) return;
+    const next = draftCredentials;
+    if (!next.server.trim() || !next.user.trim() || !next.pass) {
       setMsg('Fill all fields');
       setMsgIsError(true);
       return;
     }
 
+    connectingRef.current = true;
     try {
       setConnecting(true);
       setConnectMsg('Connecting…');
@@ -272,32 +292,54 @@ export default function App() {
       setMsgIsError(false);
       setSettingsProgress(10);
 
-      const auth = await jget(apiUrl({})) as Record<string, unknown>;
+      const requestUrl = (params: Record<string, string>) => providerApiUrl(next, params);
+      const auth = await jget(requestUrl({})) as Record<string, unknown>;
       if (!(auth?.user_info as Record<string, unknown>)?.auth) throw new Error('Auth failed');
 
       setConnectMsg('Loading categories…');
       setConnectProgress(45);
       setSettingsProgress(45);
 
-      const raw = await jget(apiUrl({ action: 'get_live_categories' }));
+      const raw = await jget(requestUrl({ action: 'get_live_categories' }));
       const all = (Array.isArray(raw) ? raw : []) as Category[];
       all.sort((a, b) => Number(a.category_id) - Number(b.category_id));
       const filtered = all.filter((c) => String(c.category_name || '').toUpperCase().includes('ALBANIA'));
       const scopedCategories = HIDE_CATEGORIES ? filtered.slice(0, 1) : filtered;
 
-      setAllCategories(filtered);
-      setCategories(HIDE_CATEGORIES && !showAllCategories ? scopedCategories : filtered);
-      setSelCat(0);
-      setChQuery('');
-      cacheRef.current.clear();
+      const accountChanged = normServer(next.server) !== normServer(server) || next.user !== user || next.pass !== pass;
+      if (accountChanged) {
+        localStorage.removeItem(LAST_KEY);
+        localStorage.removeItem(LAST_CAT_KEY);
+      }
 
       localStorage.setItem(SAVE_KEY, JSON.stringify({
-        server, user, pass, fmt, epgUrl,
+        ...next, fmt, epgUrl,
         rememberChannel: remember,
         useProxy,
         rememberProxyMode,
         checkVideo,
       }));
+
+      if (accountChanged) {
+        if (tuneTimerRef.current) clearTimeout(tuneTimerRef.current);
+        if (zapTimerRef.current) clearTimeout(zapTimerRef.current);
+        tuneTimerRef.current = null;
+        zapTimerRef.current = null;
+        resetPlayback();
+        setZapDigits('');
+        setResumeLabel('');
+      }
+      setCredentials(next);
+      cacheRef.current = new Map();
+      activeCatRef.current = '';
+      setAllCategories(filtered);
+      setCategories(HIDE_CATEGORIES && !showAllCategories ? scopedCategories : filtered);
+      setActiveCatName('Channels');
+      setChannels([]);
+      setSelCat(0);
+      setSelCh(0);
+      setCatQuery('');
+      setChQuery('');
 
       setConnectMsg('Loading channels…');
       setConnectProgress(70);
@@ -311,7 +353,7 @@ export default function App() {
       // itself stays hidden on startup — only its channels are shown.
       const rememberedCatId = remember ? (localStorage.getItem(LAST_CAT_KEY) || last?.catId || '') : '';
       const startCat = filtered.find((c) => String(c.category_id) === String(rememberedCatId)) || scopedCategories[0];
-      if (startCat) await loadCategory(startCat, true);
+      if (startCat) await loadCategory(startCat, true, { requestUrl, query: '' });
 
       setConnectProgress(90);
       setSettingsProgress(90);
@@ -349,10 +391,11 @@ export default function App() {
       setSettingsProgress(0);
       setSettingsOpen(true);
     } finally {
+      connectingRef.current = false;
       setConnecting(false);
       setConnectProgress(0);
     }
-  }, [apiUrl, epgUrl, fmt, jget, loadCategory, pass, playChannel, remember, rememberProxyMode, server, setHudSub, setHudTitle, showAllCategories, useProxy, user, wakeHud]);
+  }, [checkVideo, draftCredentials, epgUrl, fmt, jget, loadCategory, pass, playChannel, remember, rememberProxyMode, resetPlayback, server, setHudSub, setHudTitle, showAllCategories, useProxy, user, wakeHud]);
 
   // ── Init from localStorage ────────────────────────────────────────────────────
   React.useEffect(() => {
@@ -372,7 +415,7 @@ export default function App() {
 
     return () => {
       if (connectTimer) clearTimeout(connectTimer);
-      stopPlayback();
+      resetPlayback();
       if (zapTimerRef.current) clearTimeout(zapTimerRef.current);
       if (tuneTimerRef.current) clearTimeout(tuneTimerRef.current);
     };
@@ -395,6 +438,7 @@ export default function App() {
 
   // ── Channel filter on query change ────────────────────────────────────────────
   React.useEffect(() => {
+    if (connectingRef.current) return;
     // Use the active category rather than categories[selCat]: while the list is
     // hidden `categories` only holds the first one, which may not be active.
     const cat = allCategories.find((c) => String(c.category_id) === activeCatRef.current) || categories[selCat];
@@ -557,7 +601,7 @@ export default function App() {
       // ── Settings open ──
       // The SettingsOverlay owns its own keyboard navigation while open; the
       // live handler just stays out of the way.
-      if (settingsOpen) return;
+      if (settingsOpen || connecting) return;
 
       // The full guide owns arrows, OK, page/channel keys, and its close key.
       // Its component handles those controls while this global player handler
@@ -776,7 +820,7 @@ export default function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [
-    categories, channelList, channelOrderMap, channels, connect,
+    categories, channelList, channelOrderMap, channels, connecting,
     customOrderInList, epgGuideOpen, executeZap, focus, loadCategory, moveByChannelRow, rememberCategory,
     orderPromptDigits, orderPromptError, orderPromptOpen, orderPromptReplaceOnDigit,
     orderPromptTarget, playNow, playingId, selCat, selCh, settingsOpen,
@@ -871,9 +915,9 @@ export default function App() {
 
       <SettingsOverlay
         open={settingsOpen}
-        server={server}
-        user={user}
-        pass={pass}
+        connecting={connecting}
+        credentials={draftCredentials}
+        onCredentialsChange={setDraftCredentials}
         fmt={fmt}
         epgUrl={epgUrl}
         remember={remember}
@@ -884,9 +928,6 @@ export default function App() {
         isError={msgIsError}
         progress={settingsProgress}
         onChange={(patch) => {
-          if (patch.server !== undefined) setServer(patch.server);
-          if (patch.user !== undefined) setUser(patch.user);
-          if (patch.pass !== undefined) setPass(patch.pass);
           if (patch.fmt !== undefined) setFmt(patch.fmt);
           if (patch.epgUrl !== undefined) setEpgUrl(patch.epgUrl);
           if (patch.remember !== undefined) setRemember(patch.remember);
@@ -907,7 +948,7 @@ export default function App() {
           localStorage.removeItem(SAVE_KEY);
           localStorage.removeItem(LAST_KEY);
           localStorage.removeItem(LAST_CAT_KEY);
-          setMsg('Cleared');
+          setMsg('Last connection cleared');
           setMsgIsError(false);
           setSettingsProgress(0);
         }}

@@ -85,6 +85,13 @@ export function usePlayback({
     }
   }, [clearEpg, stopEpgRefresh, videoRef]);
 
+  const resetPlayback = React.useCallback(() => {
+    ++playTokenRef.current;
+    stopPlayback();
+    setPlayingId(null);
+    setBuffering(false);
+  }, [stopPlayback]);
+
   const playChannel = React.useCallback((ch: Channel, forceFmt?: StreamFormat) => {
     const v = videoRef.current;
     if (!v) return;
@@ -586,5 +593,5 @@ export function usePlayback({
     writeChannelProxyMemory,
   ]);
 
-  return { playingId, buffering, playChannel, stopPlayback };
+  return { playingId, buffering, playChannel, resetPlayback };
 }

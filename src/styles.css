@@ -318,7 +318,7 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   width: min(820px, 94vw); max-height: 92vh; overflow-y: auto; border-radius: 20px;
   border: 1px solid rgba(255, 255, 255, .10);
   background: linear-gradient(180deg, rgba(255, 255, 255, .06), rgba(255, 255, 255, .015));
-  box-shadow: 0 24px 80px rgba(0, 0, 0, .6); padding: 32px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .6); padding: 32px; outline: none;
   animation: settingsIn .3s ease;
 }
 /* Remote/keyboard focus highlight for the currently-selected settings row. */
@@ -331,20 +331,27 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
 }
 #settingsCard h2 { margin: 0 0 6px; font-size: 24px; font-weight: 800; }
 #settingsCard .sub { margin: 0 0 22px; color: rgba(232, 240, 250, .50); font-size: 15px; }
-.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.row2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
 .field label { font-size: 14px; color: rgba(232, 240, 250, .65); font-weight: 500; }
 .fieldHint { margin-left: 6px; color: var(--muted); font-size: 11px; font-weight: 500; }
-.field input {
+.field input, .field select {
   font-size: 17px; padding: 13px 16px; border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, .10);
   background: rgba(0, 0, 0, .30); color: var(--text); outline: none;
   transition: border-color .15s, box-shadow .15s;
 }
-.field input:focus {
+.field input:focus, .field select:focus {
   border-color: rgba(58, 160, 255, .7);
   box-shadow: 0 0 0 3px rgba(58, 160, 255, .12);
 }
+.field select { color-scheme: dark; }
+.profileActions {
+  display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px; margin-bottom: 14px;
+}
+.profileActions .field { flex: 1 1 220px; min-width: 0; margin: 0; }
+.profileActions :disabled, .settActions :disabled { opacity: .5; cursor: default; }
+.profileStatus:not(:empty) { margin-bottom: 14px; }
 
 /* Toggle row */
 .toggleRow {
