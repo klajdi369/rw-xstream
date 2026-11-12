@@ -190,8 +190,10 @@ export function usePlayback({
       // Brief pause to let old connections drain — prevents 403 from
       // IPTV servers that reject concurrent connections per account.
       const prevAttempt = index > 0 ? attempts[index - 1] : null;
-      const switchingDirectToProxy = !!(retry === 0 && attempt.viaProxy && prevAttempt && !prevAttempt.viaProxy);
-      const waitMs = switchingDirectToProxy
+      const switchingRoute = retry === 0 && prevAttempt && (
+        (attempt.viaProxy && !prevAttempt.viaProxy) || attempt.sourceFormat !== prevAttempt.sourceFormat
+      );
+      const waitMs = switchingRoute
         ? 1800
         : (retry > 0 ? 600 : (index === 0 ? 150 : 300));
       await new Promise((r) => setTimeout(r, waitMs));
@@ -223,7 +225,7 @@ export function usePlayback({
       let playingSince = 0;
       let blackGuard: ReturnType<typeof window.setTimeout> | null = null;
       // Some TV browsers never emit canplay or error for unsupported sources.
-      const noProgressMs = attempt.viaTranscode ? 25000 : 15000;
+      const noProgressMs = viaServer ? 25000 : 15000;
       const diagnosticTimer = debugPlayback ? window.setTimeout(() => {
         if (!settled && playToken === playTokenRef.current) {
           reportAttempt(`No playback after ${noProgressMs / 1000}s (${describeMediaState(v)}).`, 'error');
@@ -250,10 +252,11 @@ export function usePlayback({
         console.warn('[Player] giving up', { modeLabel, reason });
         stopPlayback(true);
         resetRememberedPlaybackMode();
-        const hint = !useProxy && !attempt.viaProxy && !attempt.viaTranscode && reason && !/proxy|offline/i.test(reason)
+        const hint = !useProxy && !viaServer && (reason || preferredFmt !== attempt.sourceFormat)
+          && !/proxy|offline/i.test(reason || '')
           ? ' (try enabling the proxy in Settings)'
           : '';
-        setHudSub(reason ? `Cannot play this stream — ${reason}${hint}` : 'Cannot play this stream');
+        setHudSub(`Cannot play this stream${reason ? ` — ${reason}` : ''}${hint}`);
         setBuffering(false);
         wakeHud();
       };
@@ -283,6 +286,19 @@ export function usePlayback({
         } else {
           giveUp(reason);
         }
+      };
+
+      const recoverIncompatibleStream = (reason: string) => {
+        if (settled || playToken !== playTokenRef.current) return;
+        if (attempt.sourceFormat === 'ts' && !viaServer && !attempts[index + 1]) {
+          if (Hls.isSupported() || v.canPlayType('application/vnd.apple.mpegurl')) {
+            attempts.push({ sourceFormat: 'm3u8', playAs: 'm3u8', viaProxy: false, viaTranscode: false });
+            reportAttempt('TS could not start. Trying the provider’s HLS stream.');
+          } else {
+            reportAttempt('The browser reports no HLS playback support.');
+          }
+        }
+        fallback(reason);
       };
 
       // A live stream can break after it started playing — a corrupt packet
@@ -324,6 +340,10 @@ export function usePlayback({
           recoverWhilePlaying(describeMediaError());
           return;
         }
+        if (attempt.playAs === 'ts' && code === 4) {
+          recoverIncompatibleStream(describeMediaError());
+          return;
+        }
         fallback(describeMediaError(), v.error?.code !== 4);
       };
       v.addEventListener('error', onMediaError);
@@ -346,6 +366,10 @@ export function usePlayback({
           const err = e as { name?: string; message?: string };
           console.warn('[Player] play() rejected', err?.name, err?.message);
           if (err?.name !== 'AbortError') reportAttempt(`Browser rejected play() (${diagnosticErrorName(e)}).`, 'error');
+          if (err?.name === 'NotSupportedError' && attempt.playAs === 'ts') {
+            recoverIncompatibleStream('the browser rejected the TS media format');
+            return;
+          }
           if (err?.name === 'NotAllowedError' && !v.muted) {
             reportAttempt('Autoplay with sound was blocked. Trying muted playback.');
             // Autoplay with sound blocked — play muted rather than not at all.
@@ -380,9 +404,7 @@ export function usePlayback({
         // Direct TS: providers often redirect a couple of times and then send
         // a backlog burst, so the first frame can take a while; with the proxy
         // off this is the only attempt, so giving up early helps nobody.
-        const maxWaitMs = attempt.viaTranscode
-          ? 20000
-          : (attempt.viaProxy ? 7000 : (isDirectHls ? 2600 : 8000));
+        const maxWaitMs = viaServer ? 20000 : isDirectHls && preferredFmt === 'm3u8' ? 2600 : 8000;
 
         const probe = () => {
           if (settled || playToken !== playTokenRef.current) return;
@@ -409,7 +431,11 @@ export function usePlayback({
 
           if (Date.now() - startedAt >= maxWaitMs) {
             if (debugPlayback) reportAttempt(`No video or audio progress (${describeMediaState(v)}).`, 'error');
-            fallback();
+            if (attempt.playAs === 'ts' && v.readyState >= HTMLMediaElement.HAVE_METADATA) {
+              recoverIncompatibleStream('stream metadata loaded but playback never started');
+            } else {
+              fallback();
+            }
             return;
           }
 
@@ -541,8 +567,10 @@ export function usePlayback({
             recoverWhilePlaying(reason);
             return;
           }
-          const unsupported = /unsupported|not supported/i.test(String(msg || ''));
-          fallback(reason, !unsupported);
+          const unsupported = d === mpegts.ErrorDetails.MEDIA_CODEC_UNSUPPORTED
+            || d === mpegts.ErrorDetails.MEDIA_FORMAT_UNSUPPORTED || /unsupported|not (?:a )?supported/i.test(msg || '');
+          if (unsupported) recoverIncompatibleStream(reason);
+          else fallback(reason, true);
         });
         p.attachMediaElement(v);
         p.load();
@@ -554,7 +582,8 @@ export function usePlayback({
         // every few seconds. So start — and resume after a stall — only once
         // a few seconds are buffered. With a backlog that's immediate.
         const CUSHION_S = 3;
-        const MAX_HOLD_MS = 6000;
+        const STARTUP_BUFFER_WAIT_MS = 3500;
+        const REBUFFER_WAIT_MS = 6000;
         const bufferedAhead = () => {
           const t = v.currentTime;
           for (let i = 0; i < v.buffered.length; i++) {
@@ -571,21 +600,20 @@ export function usePlayback({
         };
         const hold = (afterStall: boolean) => {
           if (holdTimer !== null) return;
-          // Count the time limit from the first buffered data, so a slow
-          // connect doesn't use it up and start us with nothing buffered.
-          let since = Date.now();
+          const startedAt = Date.now();
+          const maxWaitMs = afterStall ? REBUFFER_WAIT_MS : STARTUP_BUFFER_WAIT_MS;
           if (afterStall) {
             console.log('[Player] stalled — rebuffering', { ahead: bufferedAhead() });
             v.pause();
             setBuffering(true);
           }
           holdTimer = window.setInterval(() => {
-            if (playToken !== playTokenRef.current) { clearHold(); return; }
+            if (playToken !== playTokenRef.current || (!afterStall && settled)) { clearHold(); return; }
             const ahead = bufferedAhead();
-            if (!afterStall && ahead === 0) since = Date.now();
-            if (ahead < CUSHION_S && Date.now() - since < MAX_HOLD_MS) return;
+            if (ahead < CUSHION_S && Date.now() - startedAt < maxWaitMs) return;
             clearHold();
             if (afterStall) setBuffering(false);
+            if (debugPlayback && !afterStall) reportAttempt(`Calling play() with ${ahead.toFixed(1)}s buffered.`);
             startPlaying();
           }, 200);
         };

@@ -68,11 +68,14 @@ export function observeMediaMilestones(video: HTMLVideoElement, report: ReportDi
   };
 }
 
+function knownCodec(value: unknown) {
+  return typeof value === 'string' && value.length <= 48
+    && /^(avc[13]|hvc1|hev1|mp4a|ac-3|ec-3|opus|av01|vp09|mp3|aac)(\.[a-z0-9]+)*$/i.test(value) ? value : '';
+}
+
 export function describeStreamTracks({ width, height, videoCodec, audioCodec }: {
   width?: unknown; height?: unknown; videoCodec?: unknown; audioCodec?: unknown;
 }) {
-  const knownCodec = (value: unknown) => typeof value === 'string' && value.length <= 48
-    && /^(avc[13]|hvc1|hev1|mp4a|ac-3|ec-3|opus|av01|vp09|mp3|aac)(\.[a-z0-9]+)*$/i.test(value) ? value : '';
   const resolution = typeof width === 'number' && typeof height === 'number'
     && width > 0 && height > 0 ? `${width} × ${height}` : '';
   return [resolution, knownCodec(videoCodec), knownCodec(audioCodec)].filter(Boolean).join(' · ') || 'track details unavailable';
@@ -91,6 +94,18 @@ export function observeMpegtsDiagnostics(
     if (tracks === lastTracks) return;
     lastTracks = tracks;
     report(`MPEG-TS tracks · ${tracks}.`);
+    const mediaSource = window.MediaSource ?? (window as Window & { ManagedMediaSource?: typeof MediaSource }).ManagedMediaSource;
+    if (typeof mediaSource?.isTypeSupported !== 'function') return;
+    const video = knownCodec(info.videoCodec);
+    const audio = knownCodec(info.audioCodec);
+    // mpegts.js uses a raw MPEG audio SourceBuffer for MP3 outside Firefox.
+    const audioMime = audio === 'mp3' && !/Firefox\//i.test(navigator.userAgent)
+      ? 'audio/mpeg' : `audio/mp4; codecs="${audio}"`;
+    const support = (type: string) => mediaSource.isTypeSupported(type) ? 'yes' : 'no';
+    const videoSupport = video ? `${video} ${support(`video/mp4; codecs="${video}"`)}` : '';
+    const audioSupport = audio ? `${audio} ${support(audioMime)}` : '';
+    const reportedSupport = [videoSupport, audioSupport].filter(Boolean).join(' · ');
+    if (reportedSupport) report(`Media Source support for these tracks · ${reportedSupport}.`);
   });
   player.on(mpegts.Events.STATISTICS_INFO, (stats: { speed?: number; hasRedirect?: boolean }) => {
     if (reportedSpeed || !isCurrent() || !stats?.speed || !Number.isFinite(stats.speed)) return;
