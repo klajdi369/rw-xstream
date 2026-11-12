@@ -34,7 +34,6 @@ type Props = PlaybackSettings & {
 // by a remote: ↑/↓ move the highlight, OK edits a field / flips a toggle /
 // presses a button, Back closes.
 enum Row {
-  Debug,
   Profiles,
   LoadProfile,
   DeleteProfile,
@@ -49,6 +48,7 @@ enum Row {
   Proxy,
   RememberProxy,
   CheckVideo,
+  Debug,
   Connect,
   Clear,
 }
@@ -164,8 +164,8 @@ export function SettingsOverlay(props: Props) {
 
       const { sel: current, onClose: close } = latest.current;
       if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); close(); return; }
-      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); setSel((v) => clamp(v + 1, Row.Debug, Row.Clear)); return; }
-      if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); setSel((v) => clamp(v - 1, Row.Debug, Row.Clear)); return; }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); setSel((v) => clamp(v + 1, Row.Profiles, Row.Clear)); return; }
+      if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); setSel((v) => clamp(v - 1, Row.Profiles, Row.Clear)); return; }
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         const row = cardRef.current?.querySelector<HTMLElement>(`[data-sel="${current}"]`);
@@ -182,8 +182,8 @@ export function SettingsOverlay(props: Props) {
   // swallowing the keystroke.
   const fieldKey = (e: React.KeyboardEvent<HTMLInputElement>, row: Row) => {
     if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); e.currentTarget.blur(); }
-    else if (e.key === 'ArrowDown') { e.preventDefault(); e.currentTarget.blur(); setSel(clamp(row + 1, Row.Debug, Row.Clear)); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); e.currentTarget.blur(); setSel(clamp(row - 1, Row.Debug, Row.Clear)); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); e.currentTarget.blur(); setSel(clamp(row + 1, Row.Profiles, Row.Clear)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); e.currentTarget.blur(); setSel(clamp(row - 1, Row.Profiles, Row.Clear)); }
   };
 
   const selClass = (row: Row) => (sel === row ? 'setSel' : '');
@@ -196,17 +196,6 @@ export function SettingsOverlay(props: Props) {
       }}>
         <h2>Settings</h2>
         <p className="sub">↑ / ↓ move · OK to select · Back to close.</p>
-        <div className={`toggleRow debugToggle ${selClass(Row.Debug)}`} data-sel={Row.Debug}
-          onClick={() => { setSel(Row.Debug); onChange({ debugPlayback: !debugPlayback }); }}>
-          <div>
-            <div id="playbackDebugLabel" className="tLabel">Playback debug</div>
-            <div className="tDesc">Show connection and video errors on screen.</div>
-          </div>
-          <label className="toggle" onClick={(e) => e.stopPropagation()}>
-            <input type="checkbox" aria-labelledby="playbackDebugLabel" checked={debugPlayback} onChange={(e) => onChange({ debugPlayback: e.target.checked })} />
-            <span className="toggleSlider" />
-          </label>
-        </div>
         {debugPlayback && <PlaybackDiagnostics entries={diagnostics} />}
         <div className="profileActions">
           <div className={`field ${selClass(Row.Profiles)}`} data-sel={Row.Profiles}>
@@ -309,6 +298,18 @@ export function SettingsOverlay(props: Props) {
           </div>
           <label className="toggle" onClick={(e) => e.stopPropagation()}>
             <input type="checkbox" checked={checkVideo && !checkVideoOff} disabled={checkVideoOff} onChange={(e) => onChange({ checkVideo: e.target.checked })} />
+            <span className="toggleSlider" />
+          </label>
+        </div>
+
+        <div className={`toggleRow ${selClass(Row.Debug)}`} data-sel={Row.Debug}
+          onClick={() => { setSel(Row.Debug); onChange({ debugPlayback: !debugPlayback }); }}>
+          <div>
+            <div id="playbackDebugLabel" className="tLabel">Playback debug</div>
+            <div className="tDesc">Show connection and video errors on screen.</div>
+          </div>
+          <label className="toggle" onClick={(e) => e.stopPropagation()}>
+            <input type="checkbox" aria-labelledby="playbackDebugLabel" checked={debugPlayback} onChange={(e) => onChange({ debugPlayback: e.target.checked })} />
             <span className="toggleSlider" />
           </label>
         </div>

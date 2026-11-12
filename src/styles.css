@@ -374,7 +374,6 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
 }
 .toggleRow .tLabel { font-size: 17px; font-weight: 600; }
 .toggleRow .tDesc { font-size: 13px; color: var(--muted); margin-top: 3px; }
-.toggleRow.debugToggle { margin-bottom: 14px; }
 /* Depends on another option that's off: still focusable, but inert. */
 .toggleRow.disabled { cursor: default; }
 .toggleRow.disabled .tLabel, .toggleRow.disabled .toggle { opacity: .4; }
