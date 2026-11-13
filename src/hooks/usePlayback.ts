@@ -5,6 +5,7 @@ import mpegts from 'mpegts.js';
 import { Channel, LastChannel } from '../types/player';
 import { normServer } from '../utils';
 import { CHANNEL_PROXY_MAX_VISITS, LAST_KEY } from '../constants';
+import type { ProxyMode } from '../player/proxyMode';
 import { ProxyMemoryMap } from './useProxyMemory';
 import { diagnosticErrorName, diagnosticHttpStatus } from './usePlaybackDiagnostics';
 import type { ReportDiagnostic } from './usePlaybackDiagnostics';
@@ -30,7 +31,7 @@ interface UsePlaybackOptions {
   user: string;
   pass: string;
   fmt: string;
-  useProxy: boolean;
+  proxyMode: ProxyMode;
   rememberProxyMode: boolean;
   /** Validate video frames with WebCodecs and skip damaged ones (extra CPU). */
   checkVideo: boolean;
@@ -55,7 +56,7 @@ export function usePlayback({
   user,
   pass,
   fmt,
-  useProxy,
+  proxyMode,
   rememberProxyMode,
   checkVideo,
   debugPlayback,
@@ -108,6 +109,7 @@ export function usePlayback({
 
     const playToken = ++playTokenRef.current;
     const preferredFmt = forceFmt ?? (fmt === 'ts' ? 'ts' : 'm3u8');
+    const useProxyMemory = proxyMode === 'fallback' && rememberProxyMode;
     const attemptOrder: PlayAttempt[] = preferredFmt === 'ts'
       ? [
         { sourceFormat: 'ts', playAs: 'ts', viaProxy: false, viaTranscode: false },
@@ -115,12 +117,11 @@ export function usePlayback({
       ]
       : [
         { sourceFormat: 'm3u8', playAs: 'm3u8', viaProxy: false, viaTranscode: false },
-        // { sourceFormat: 'm3u8', playAs: 'm3u8', viaProxy: true, viaTranscode: false },
         { sourceFormat: 'm3u8', playAs: 'ts', viaProxy: false, viaTranscode: true },
       ];
 
     const channelId = String(ch.stream_id);
-    const rememberedMode = rememberProxyMode ? readChannelProxyMemory()[channelId] : null;
+    const rememberedMode = useProxyMemory ? readChannelProxyMemory()[channelId] : null;
     const rememberedUseProxy = rememberedMode && rememberedMode.visits <= CHANNEL_PROXY_MAX_VISITS
       ? rememberedMode.useProxy
       : null;
@@ -132,16 +133,16 @@ export function usePlayback({
       return [...preferred, ...fallback];
     };
 
-    const attempts = useProxy
+    const attempts = proxyMode === 'fallback'
       ? reorderAttempts(attemptOrder)
-      : attemptOrder.filter((a) => !a.viaProxy && !a.viaTranscode);
+      : attemptOrder.filter((a) => (a.viaProxy || a.viaTranscode) === (proxyMode === 'always'));
 
     if (debugPlayback) {
-      reportDiagnostic(`Tune requested · ${preferredFmt === 'ts' ? 'MPEG-TS' : 'HLS'} · proxy ${useProxy ? 'on' : 'off'} · frame checking ${checkVideo && preferredFmt === 'ts' ? 'on' : 'off'} · ${attempts.length} playback route${attempts.length === 1 ? '' : 's'}.`);
+      reportDiagnostic(`Tune requested · ${preferredFmt === 'ts' ? 'MPEG-TS' : 'HLS'} · proxy ${proxyMode} · frame checking ${checkVideo && preferredFmt === 'ts' && proxyMode !== 'always' ? 'on' : 'off'} · ${attempts.length} playback route${attempts.length === 1 ? '' : 's'}.`);
     }
 
     const rememberChannelPlaybackMode = (loadedThroughProxy: boolean) => {
-      if (!rememberProxyMode) return;
+      if (!useProxyMemory) return;
       const memory = readChannelProxyMemory();
       const prevVisits = Number(memory[channelId]?.visits || 0);
       const visits = prevVisits + 1;
@@ -154,7 +155,7 @@ export function usePlayback({
     };
 
     const resetRememberedPlaybackMode = () => {
-      if (!rememberProxyMode) return;
+      if (!useProxyMemory) return;
       const memory = readChannelProxyMemory();
       if (memory[channelId]) {
         delete memory[channelId];
@@ -191,7 +192,8 @@ export function usePlayback({
       // IPTV servers that reject concurrent connections per account.
       const prevAttempt = index > 0 ? attempts[index - 1] : null;
       const switchingRoute = retry === 0 && prevAttempt && (
-        (attempt.viaProxy && !prevAttempt.viaProxy) || attempt.sourceFormat !== prevAttempt.sourceFormat
+        (attempt.viaProxy || attempt.viaTranscode) !== (prevAttempt.viaProxy || prevAttempt.viaTranscode)
+        || attempt.sourceFormat !== prevAttempt.sourceFormat
       );
       const waitMs = switchingRoute
         ? 1800
@@ -222,6 +224,7 @@ export function usePlayback({
       let settled = false;
       // Frames are coming through (the black-screen guard saw them).
       let playing = false;
+      let playRequested = false;
       let playingSince = 0;
       let blackGuard: ReturnType<typeof window.setTimeout> | null = null;
       // Some TV browsers never emit canplay or error for unsupported sources.
@@ -252,7 +255,7 @@ export function usePlayback({
         console.warn('[Player] giving up', { modeLabel, reason });
         stopPlayback(true);
         resetRememberedPlaybackMode();
-        const hint = !useProxy && !viaServer && (reason || preferredFmt !== attempt.sourceFormat)
+        const hint = proxyMode === 'off' && (reason || preferredFmt !== attempt.sourceFormat)
           && !/proxy|offline/i.test(reason || '')
           ? ' (try enabling the proxy in Settings)'
           : '';
@@ -272,6 +275,7 @@ export function usePlayback({
         window.clearTimeout(progressTimer);
 
         if (attempts[index + 1]) {
+          quickReconnects = 0;
           reportAttempt('Trying another playback route.');
           console.warn('[Player] fallback', { modeLabel, next: index + 1, reason });
           setHudSub(`${modeLabel} failed — retrying…`);
@@ -310,7 +314,9 @@ export function usePlayback({
         playing = false;
         quickReconnects = Date.now() - playingSince >= 10000 ? 0 : quickReconnects + 1;
         if (quickReconnects >= 3) {
-          giveUp(reason);
+          // A route that repeatedly starts and immediately fails should also fall back.
+          settled = false;
+          fallback(reason);
           return;
         }
         console.warn('[Player] stream error while playing — reconnecting', { modeLabel, reason });
@@ -350,6 +356,8 @@ export function usePlayback({
       const stopMediaDiagnostics = debugPlayback ? observeMediaMilestones(v, reportAttempt) : undefined;
       detachMediaRef.current = () => {
         v.removeEventListener('error', onMediaError);
+        v.oncanplay = null;
+        clearBlackGuard();
         stopMediaDiagnostics?.();
         window.clearTimeout(diagnosticTimer);
         window.clearTimeout(progressTimer);
@@ -361,6 +369,7 @@ export function usePlayback({
       // when the browser blocks autoplay with sound. Previously any rejection
       // ended playback with "Cannot play this stream" after the first frame.
       const startPlaying = () => {
+        playRequested = true;
         v.play()?.catch((e: unknown) => {
           if (settled || playToken !== playTokenRef.current) return;
           const err = e as { name?: string; message?: string };
@@ -397,14 +406,10 @@ export function usePlayback({
       };
 
       const armBlackGuard = () => {
-        clearBlackGuard();
-
         const startedAt = Date.now();
         const isDirectHls = attempt.playAs === 'm3u8' && !attempt.viaProxy && !attempt.viaTranscode;
-        // Direct TS: providers often redirect a couple of times and then send
-        // a backlog burst, so the first frame can take a while; with the proxy
-        // off this is the only attempt, so giving up early helps nobody.
-        const maxWaitMs = viaServer ? 20000 : isDirectHls && preferredFmt === 'm3u8' ? 2600 : 8000;
+        // HLS needs time to load both a playlist and its first segment.
+        const maxWaitMs = viaServer ? 20000 : isDirectHls ? 12000 : 8000;
 
         const probe = () => {
           if (settled || playToken !== playTokenRef.current) return;
@@ -414,7 +419,7 @@ export function usePlayback({
           const progressed = v.currentTime > 1 || (!v.paused && v.readyState >= 3);
           const hasAudioBytes = ((v as HTMLVideoElement & { webkitAudioDecodedByteCount?: number }).webkitAudioDecodedByteCount || 0) > 0;
 
-          if (frames > 0 || progressed || hasAudioBytes) {
+          if (playRequested && !v.paused && (frames > 0 || progressed || hasAudioBytes)) {
             settled = true;
             playing = true;
             playingSince = Date.now();
@@ -434,7 +439,7 @@ export function usePlayback({
             if (attempt.playAs === 'ts' && v.readyState >= HTMLMediaElement.HAVE_METADATA) {
               recoverIncompatibleStream('stream metadata loaded but playback never started');
             } else {
-              fallback();
+              fallback('no playable media received before the startup timeout');
             }
             return;
           }
@@ -445,6 +450,8 @@ export function usePlayback({
         const firstProbeMs = isDirectHls ? 1200 : 2500;
         blackGuard = window.setTimeout(probe, firstProbeMs);
       };
+
+      armBlackGuard();
 
       if (attempt.playAs === 'm3u8' && Hls.isSupported()) {
         reportAttempt('Using HLS.js (Media Source).');
@@ -489,7 +496,6 @@ export function usePlayback({
           }
           setHudSub(`▶ Live (${modeLabel})`);
           startPlaying();
-          armBlackGuard();
         });
         let nonFatalHlsErrorScore = 0;
         const hlsStartedAt = Date.now();
@@ -499,7 +505,9 @@ export function usePlayback({
           const status = diagnosticHttpStatus(d?.response?.code);
           reportAttempt([`HLS ${d.details || d.type}`, status || (d.response?.code === 0 ? 'no HTTP response' : ''), d.fatal ? 'fatal' : 'recoverable'].filter(Boolean).join(' · '), 'error');
           if (d?.fatal) {
-            fallback();
+            const reason = status ? `HLS ${d.details} (${status})` : `HLS ${d.details}`;
+            if (playing) recoverWhilePlaying(reason);
+            else fallback(reason);
             return;
           }
           const isDirectHlsAttempt = !attempt.viaProxy && !attempt.viaTranscode;
@@ -510,7 +518,7 @@ export function usePlayback({
           // retry can succeed from the browser — go to the proxy path now.
           if (isDirectHlsAttempt && d?.details === 'fragLoadError' && d?.response?.code === 0) {
             console.warn('[HLS] segment blocked by browser (CORS) — skipping direct HLS', { fragUrl: d?.frag?.url });
-            fallback(useProxy ? 'segments blocked (CORS)' : 'segments blocked (CORS) — enable the proxy in Settings');
+            fallback(proxyMode === 'off' ? 'segments blocked (CORS) — enable the proxy in Settings' : 'segments blocked (CORS)');
             return;
           }
           const suspiciousDetails = new Set([
@@ -668,7 +676,6 @@ export function usePlayback({
 
         hold(false);
         setHudSub(`▶ TS Live (${modeLabel})`);
-        armBlackGuard();
         return;
       }
 
@@ -685,7 +692,6 @@ export function usePlayback({
       v.oncanplay = () => {
         if (playToken !== playTokenRef.current) return;
         setHudSub(`▶ Live (${modeLabel})`);
-        armBlackGuard();
       };
       startPlaying();
     };
@@ -712,7 +718,7 @@ export function usePlayback({
     setHudSub,
     setHudTitle,
     stopPlayback,
-    useProxy,
+    proxyMode,
     user,
     videoRef,
     wakeHud,

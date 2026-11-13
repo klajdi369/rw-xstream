@@ -4,12 +4,14 @@ import type { Credentials } from '../connectionProfiles';
 import { clamp, normServer } from '../utils';
 import type { DiagnosticEntry } from '../hooks/usePlaybackDiagnostics';
 import { PlaybackDebugReport, PlaybackDiagnostics } from './PlaybackDiagnostics';
+import { PROXY_MODES } from '../player/proxyMode';
+import type { ProxyMode } from '../player/proxyMode';
 
 type PlaybackSettings = {
   fmt: string;
   epgUrl: string;
   remember: boolean;
-  useProxy: boolean;
+  proxyMode: ProxyMode;
   rememberProxyMode: boolean;
   checkVideo: boolean;
   debugPlayback: boolean;
@@ -55,9 +57,15 @@ enum Row {
   DebugReport,
 }
 
+const PROXY_LABELS: Record<ProxyMode, string> = {
+  off: 'No proxy',
+  fallback: 'Proxy fallback',
+  always: 'Always proxy',
+};
+
 export function SettingsOverlay(props: Props) {
   const {
-    open, connecting, credentials, fmt, epgUrl, remember, useProxy, rememberProxyMode, checkVideo, debugPlayback,
+    open, connecting, credentials, fmt, epgUrl, remember, proxyMode, rememberProxyMode, checkVideo, debugPlayback,
     diagnostics, diagnosticEnvironment,
     message, isError, progress, onChange, onCredentialsChange, onConnect, onClear, onClose,
   } = props;
@@ -76,12 +84,11 @@ export function SettingsOverlay(props: Props) {
 
   // Options that only matter together with another one are greyed out (and
   // ignore OK/clicks) when it's off; their saved value is kept for later.
-  // - Proxy memory decides between direct and proxy per channel: proxy off,
-  //   nothing to decide.
+  // - Proxy memory chooses the initial playback route in fallback mode.
   // - The video check works on direct TS (format "ts"); m3u8 plays through
   //   hls.js, and the proxy's ffmpeg output is clean already.
-  const proxyMemoryOff = !useProxy;
-  const checkVideoOff = fmt !== 'ts';
+  const proxyMemoryOff = proxyMode !== 'fallback';
+  const checkVideoOff = fmt !== 'ts' || proxyMode === 'always';
   const cardRef = React.useRef<HTMLDivElement>(null);
 
   React.useLayoutEffect(() => {
@@ -191,7 +198,7 @@ export function SettingsOverlay(props: Props) {
   // Inside a text field: leave back to row navigation without the field
   // swallowing the keystroke.
   const fieldKey = (e: React.KeyboardEvent<HTMLInputElement>, row: Row) => {
-    if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); e.currentTarget.blur(); }
+    if (e.key === 'Enter' || e.key === 'Escape' || e.key === 'BrowserBack') { e.preventDefault(); e.currentTarget.blur(); }
     else if (e.key === 'ArrowDown') { e.preventDefault(); e.currentTarget.blur(); setSel(clamp(row + 1, Row.Profiles, lastRow)); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); e.currentTarget.blur(); setSel(clamp(row - 1, Row.Profiles, lastRow)); }
   };
@@ -283,15 +290,24 @@ export function SettingsOverlay(props: Props) {
           </label>
         </div>
 
-        <div className={`toggleRow ${selClass(Row.Proxy)}`} data-sel={Row.Proxy} onClick={() => { setSel(Row.Proxy); onChange({ useProxy: !useProxy }); }}>
-          <div>
-            <div className="tLabel">Use local proxy + deinterlace</div>
-            <div className="tDesc">Route through /proxy and ffmpeg for interlaced channels</div>
+        <div className={`proxyModeRow ${selClass(Row.Proxy)}`} data-sel={Row.Proxy}>
+          <label className="tLabel" htmlFor="playbackProxyMode">Playback proxy</label>
+          <div id="playbackProxyHint" className="tDesc">{proxyMode === 'off' ? 'Play directly from the provider.'
+            : proxyMode === 'fallback' ? 'Try direct playback, then use the proxy if it fails.'
+              : 'Start every channel through the local proxy.'}</div>
+          <input id="playbackProxyMode" type="range" min="0" max="2" step="1"
+            value={PROXY_MODES.indexOf(proxyMode)} aria-valuetext={PROXY_LABELS[proxyMode]}
+            aria-describedby="playbackProxyHint" onKeyDown={(e) => fieldKey(e, Row.Proxy)}
+            onChange={(e) => onChange({ proxyMode: PROXY_MODES[e.currentTarget.valueAsNumber] })} />
+          <div className="proxyModeLabels">
+            {PROXY_MODES.map((mode) => (
+              <button type="button" key={mode} tabIndex={-1} aria-pressed={proxyMode === mode}
+                onClick={() => {
+                  cardRef.current?.querySelector<HTMLInputElement>('#playbackProxyMode')?.focus();
+                  onChange({ proxyMode: mode });
+                }}>{PROXY_LABELS[mode]}</button>
+            ))}
           </div>
-          <label className="toggle" onClick={(e) => e.stopPropagation()}>
-            <input type="checkbox" checked={useProxy} onChange={(e) => onChange({ useProxy: e.target.checked })} />
-            <span className="toggleSlider" />
-          </label>
         </div>
 
         <div className={`toggleRow ${selClass(Row.RememberProxy)} ${proxyMemoryOff ? 'disabled' : ''}`} data-sel={Row.RememberProxy} aria-disabled={proxyMemoryOff}
@@ -299,8 +315,8 @@ export function SettingsOverlay(props: Props) {
           <div>
             <div className="tLabel">Remember proxy mode per channel</div>
             <div className="tDesc">{proxyMemoryOff
-              ? 'Only used with the proxy on'
-              : 'Reset after 6 successful loads or on complete playback failure'}</div>
+              ? 'Only available in Proxy fallback mode'
+              : 'Try the last successful route first. Reset after 6 successful loads or a playback failure.'}</div>
           </div>
           <label className="toggle" onClick={(e) => e.stopPropagation()}>
             <input type="checkbox" checked={rememberProxyMode && !proxyMemoryOff} disabled={proxyMemoryOff} onChange={(e) => onChange({ rememberProxyMode: e.target.checked })} />
@@ -313,7 +329,7 @@ export function SettingsOverlay(props: Props) {
           <div>
             <div className="tLabel">Skip damaged video frames</div>
             <div className="tDesc">{checkVideoOff
-              ? 'Only works with format "ts"'
+              ? 'Only works with direct playback in TS format'
               : 'Check each frame before showing it, so a damaged one is skipped instead of reconnecting. Uses extra CPU (around 40% of a core for an HD channel)'}</div>
           </div>
           <label className="toggle" onClick={(e) => e.stopPropagation()}>

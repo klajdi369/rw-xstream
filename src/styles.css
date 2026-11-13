@@ -380,8 +380,16 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   padding: 16px; border-top: 1px solid var(--line); margin-top: 4px;
   cursor: pointer;
 }
-.toggleRow .tLabel { font-size: 17px; font-weight: 600; }
-.toggleRow .tDesc { font-size: 13px; color: var(--muted); margin-top: 3px; }
+.toggleRow .tLabel, .proxyModeRow .tLabel { font-size: 17px; font-weight: 600; }
+.toggleRow .tDesc, .proxyModeRow .tDesc { font-size: 13px; color: var(--muted); margin-top: 3px; }
+.proxyModeRow { padding: 16px; border-top: 1px solid var(--line); margin-top: 4px; }
+.proxyModeRow input { display: block; width: 100%; margin: 12px 0 2px; accent-color: var(--acc); cursor: pointer; }
+.proxyModeRow input:focus-visible { outline: 2px solid var(--foc); outline-offset: 4px; border-radius: 6px; }
+.proxyModeLabels { display: flex; justify-content: space-between; gap: 8px; }
+.proxyModeLabels button {
+  padding: 5px 0; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 14px; cursor: pointer;
+}
+.proxyModeLabels button[aria-pressed="true"] { color: var(--acc); font-weight: 700; }
 /* Depends on another option that's off: still focusable, but inert. */
 .toggleRow.disabled { cursor: default; }
 .toggleRow.disabled .tLabel, .toggleRow.disabled .toggle { opacity: .4; }

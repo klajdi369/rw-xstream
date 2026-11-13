@@ -14,6 +14,7 @@ import { diagnosticErrorName, usePlaybackDiagnostics } from './hooks/usePlayback
 import { useProxyMemory } from './hooks/useProxyMemory';
 import { useToast } from './hooks/useToast';
 import { Category, Channel, LastChannel } from './types/player';
+import { readProxyMode } from './player/proxyMode';
 import { isGuideToggle } from './epg/remote';
 import type { Credentials } from './connectionProfiles';
 import {
@@ -89,7 +90,7 @@ export default function App() {
     Object.prototype.hasOwnProperty.call(saved, 'epgUrl') ? String(saved.epgUrl ?? '') : DEFAULT_EPG_URL,
   );
   const [remember, setRemember] = React.useState(saved.rememberChannel !== false);
-  const [useProxy, setUseProxy] = React.useState(saved.useProxy === true);
+  const [proxyMode, setProxyMode] = React.useState(() => readProxyMode(saved));
   const [rememberProxyMode, setRememberProxyMode] = React.useState(saved.rememberProxyMode !== false);
   // Off by default: costs a second (software) decode of the video.
   const [checkVideo, setCheckVideo] = React.useState(saved.checkVideo === true);
@@ -223,7 +224,7 @@ export default function App() {
     user,
     pass,
     fmt,
-    useProxy,
+    proxyMode,
     rememberProxyMode,
     checkVideo,
     debugPlayback,
@@ -361,7 +362,7 @@ export default function App() {
       localStorage.setItem(SAVE_KEY, JSON.stringify({
         ...next, fmt, epgUrl,
         rememberChannel: remember,
-        useProxy,
+        proxyMode,
         rememberProxyMode,
         checkVideo,
       }));
@@ -445,7 +446,7 @@ export default function App() {
       setConnecting(false);
       setConnectProgress(0);
     }
-  }, [checkVideo, draftCredentials, epgUrl, fmt, jget, loadCategory, pass, playChannel, remember, rememberProxyMode, reportDiagnostic, resetPlayback, server, setHudSub, setHudTitle, showAllCategories, useProxy, user, wakeHud]);
+  }, [checkVideo, draftCredentials, epgUrl, fmt, jget, loadCategory, pass, playChannel, proxyMode, remember, rememberProxyMode, reportDiagnostic, resetPlayback, server, setHudSub, setHudTitle, showAllCategories, user, wakeHud]);
 
   // ── Init from localStorage ────────────────────────────────────────────────────
   React.useEffect(() => {
@@ -972,7 +973,7 @@ export default function App() {
         fmt={fmt}
         epgUrl={epgUrl}
         remember={remember}
-        useProxy={useProxy}
+        proxyMode={proxyMode}
         rememberProxyMode={rememberProxyMode}
         checkVideo={checkVideo}
         debugPlayback={debugPlayback}
@@ -986,14 +987,19 @@ export default function App() {
           if (patch.fmt !== undefined) setFmt(patch.fmt);
           if (patch.epgUrl !== undefined) setEpgUrl(patch.epgUrl);
           if (patch.remember !== undefined) setRemember(patch.remember);
-          if (patch.useProxy !== undefined) setUseProxy(patch.useProxy);
+          if (patch.proxyMode !== undefined) setProxyMode(patch.proxyMode);
           if (patch.rememberProxyMode !== undefined) setRememberProxyMode(patch.rememberProxyMode);
-          if (patch.checkVideo !== undefined) {
-            setCheckVideo(patch.checkVideo);
-            // Takes effect on the next channel; keep it without needing Connect.
+          if (patch.checkVideo !== undefined) setCheckVideo(patch.checkVideo);
+          if (patch.proxyMode !== undefined || patch.checkVideo !== undefined || patch.rememberProxyMode !== undefined) {
+            // These preferences apply on the next tune without reconnecting the account.
             try {
               const stored = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}');
-              localStorage.setItem(SAVE_KEY, JSON.stringify({ ...stored, checkVideo: patch.checkVideo }));
+              localStorage.setItem(SAVE_KEY, JSON.stringify({
+                ...stored,
+                ...(patch.proxyMode !== undefined ? { proxyMode: patch.proxyMode } : {}),
+                ...(patch.checkVideo !== undefined ? { checkVideo: patch.checkVideo } : {}),
+                ...(patch.rememberProxyMode !== undefined ? { rememberProxyMode: patch.rememberProxyMode } : {}),
+              }));
             } catch { /* storage unavailable */ }
           }
         }}
