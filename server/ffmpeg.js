@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process';
 import { send } from './utils.js';
 
+const VIDEO_FILTER = 'yadif=mode=send_frame:parity=auto:deint=interlaced';
+const SCALE_TO_720P = "scale=w='min(iw,1280)':h='min(ih,720)':force_original_aspect_ratio=decrease:force_divisible_by=2:flags=fast_bilinear";
+
 const FFMPEG_TRANSCODE_ARGS = [
-  '-vf', 'yadif=0:-1:0',
   '-c:v', 'libx264',
-  '-preset', 'veryfast',
+  '-preset', 'superfast',
   '-tune', 'zerolatency',
   '-pix_fmt', 'yuv420p',
   '-g', '50',
@@ -16,6 +18,10 @@ const FFMPEG_TRANSCODE_ARGS = [
   '-ac', '2',
   '-f', 'mpegts',
 ];
+
+function transcodeArgs(limitTo720p) {
+  return ['-vf', limitTo720p ? `${VIDEO_FILTER},${SCALE_TO_720P}` : VIDEO_FILTER, ...FFMPEG_TRANSCODE_ARGS];
+}
 
 const FFMPEG_BASE_ARGS = [
   '-hide_banner',
@@ -64,11 +70,11 @@ function pipeFfmpegToResponse(ffmpeg, res, contentType) {
   res.on('close', kill);
 }
 
-export function proxyViaFfmpeg(stream, res) {
+export function proxyViaFfmpeg(stream, res, limitTo720p) {
   const ffmpeg = spawn('ffmpeg', [
     ...FFMPEG_BASE_ARGS,
     '-i', 'pipe:0',
-    ...FFMPEG_TRANSCODE_ARGS,
+    ...transcodeArgs(limitTo720p),
     'pipe:1',
   ]);
 
@@ -81,14 +87,14 @@ export function proxyViaFfmpeg(stream, res) {
   pipeFfmpegToResponse(ffmpeg, res, 'video/mp2t');
 }
 
-export function transcodeFromUrl(targetUrl, res) {
+export function transcodeFromUrl(targetUrl, res, limitTo720p) {
   const ffmpeg = spawn('ffmpeg', [
     ...FFMPEG_BASE_ARGS,
     '-reconnect', '1',
     '-reconnect_streamed', '1',
     '-reconnect_delay_max', '2',
     '-i', targetUrl,
-    ...FFMPEG_TRANSCODE_ARGS,
+    ...transcodeArgs(limitTo720p),
     'pipe:1',
   ]);
 

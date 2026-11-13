@@ -6,6 +6,7 @@ import { Channel, LastChannel } from '../types/player';
 import { normServer } from '../utils';
 import { CHANNEL_PROXY_MAX_VISITS, LAST_KEY } from '../constants';
 import type { ProxyMode } from '../player/proxyMode';
+import { monitorProxyDelivery } from '../player/proxyDelivery';
 import { ProxyMemoryMap } from './useProxyMemory';
 import { diagnosticErrorName, diagnosticHttpStatus } from './usePlaybackDiagnostics';
 import type { ReportDiagnostic } from './usePlaybackDiagnostics';
@@ -21,6 +22,7 @@ interface PlayAttempt {
   playAs: StreamFormat;
   viaProxy: boolean;
   viaTranscode: boolean;
+  limitTo720p?: boolean;
 }
 
 interface UsePlaybackOptions {
@@ -194,6 +196,7 @@ export function usePlayback({
       const switchingRoute = retry === 0 && prevAttempt && (
         (attempt.viaProxy || attempt.viaTranscode) !== (prevAttempt.viaProxy || prevAttempt.viaTranscode)
         || attempt.sourceFormat !== prevAttempt.sourceFormat
+        || attempt.limitTo720p !== prevAttempt.limitTo720p
       );
       const waitMs = switchingRoute
         ? 1800
@@ -202,15 +205,16 @@ export function usePlayback({
       if (playToken !== playTokenRef.current) return;
 
       const directUrl = `${normServer(server)}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${encodeURIComponent(String(ch.stream_id))}.${attempt.sourceFormat}`;
-      const proxyAbsolute = `${backendBaseRef.current}/proxy?url=${encodeURIComponent(directUrl)}&deint=1`;
-      const transcodeAbsolute = `${backendBaseRef.current}/proxy-transcode?url=${encodeURIComponent(directUrl)}`;
+      const quality = attempt.limitTo720p ? '&quality=720p' : '';
+      const proxyAbsolute = `${backendBaseRef.current}/proxy?url=${encodeURIComponent(directUrl)}&deint=1${quality}`;
+      const transcodeAbsolute = `${backendBaseRef.current}/proxy-transcode?url=${encodeURIComponent(directUrl)}${quality}`;
       const url = attempt.viaTranscode ? transcodeAbsolute : (attempt.viaProxy ? proxyAbsolute : directUrl);
 
       // Both the plain proxy and the FFMPEG transcode are fetched through our
       // own server, so surface "Proxy" in either case — the FFMPEG path reads
       // "Proxy + FFMPEG" to make clear it too came from the proxy, not direct.
       const viaServer = attempt.viaProxy || attempt.viaTranscode;
-      const modeLabel = `${attempt.playAs.toUpperCase()}${viaServer ? ' + Proxy' : ''}${attempt.viaTranscode ? ' + FFMPEG' : ''}`;
+      const modeLabel = `${attempt.playAs.toUpperCase()}${viaServer ? ' + Proxy' : ''}${attempt.viaTranscode ? ' + FFMPEG' : ''}${attempt.limitTo720p ? ' (720p limit)' : ''}`;
       const attemptLabel = `Attempt ${++attemptNumber} · ${modeLabel}`;
       const reportAttempt: ReportDiagnostic = (message, level) => reportDiagnostic(`${attemptLabel} · ${message}`, level);
       reportAttempt(`Starting ${viaServer ? 'proxy' : 'direct'} playback${retry ? ' (retry)' : ''}.`);
@@ -589,7 +593,7 @@ export function usePlayback({
         // normal delivery jitter (measured at up to 1.5 s) becomes a stall
         // every few seconds. So start — and resume after a stall — only once
         // a few seconds are buffered. With a backlog that's immediate.
-        const CUSHION_S = 3;
+        const CUSHION_S = viaServer ? 5 : 3;
         // A transcoder usually delivers at live speed, without the initial burst
         // that lets a direct stream fill the cushion quickly.
         const STARTUP_BUFFER_WAIT_MS = viaServer ? 8000 : 3500;
@@ -629,9 +633,26 @@ export function usePlayback({
             startPlaying();
           }, 200);
         };
+        const proxyDelivery = viaServer ? monitorProxyDelivery() : null;
+        const sampleProxyDelivery = proxyDelivery ? window.setInterval(() => {
+          const ranges = v.buffered;
+          if (playing && ranges.length) proxyDelivery.sample(performance.now(), ranges.end(ranges.length - 1));
+        }, 1000) : undefined;
         const onWaiting = () => {
           if (!playing || v.paused || bufferedAhead() >= 0.5) return;
-          if (debugPlayback) reportAttempt(`Rebuffering (${describeMediaState(v)}).`, 'error');
+          const delivery = proxyDelivery?.stall();
+          const rate = delivery?.rate;
+          const rateDetail = rate == null ? '' : ` · Delivery ${rate.toFixed(2)}× real time over ~8s`;
+          if (debugPlayback) reportAttempt(`Rebuffering (${describeMediaState(v)})${rateDetail}.`, 'error');
+          if (delivery && delivery.slowStalls >= 2 && !attempt.limitTo720p && (v.videoHeight > 720 || v.videoWidth > 1280)) {
+            attempts.splice(index + 1, 0, { ...attempt, limitTo720p: true });
+            reportAttempt('Proxy delivery is below real time. Retrying with a 720p output limit.');
+            playing = false;
+            settled = false;
+            setBuffering(true);
+            fallback('proxy delivery below real time');
+            return;
+          }
           hold(true);
         };
         v.addEventListener('waiting', onWaiting);
@@ -671,6 +692,7 @@ export function usePlayback({
           detachEarlier?.();
           v.removeEventListener('waiting', onWaiting);
           window.clearInterval(slowWatch);
+          window.clearInterval(sampleProxyDelivery);
           clearHold();
         };
 

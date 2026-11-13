@@ -95,7 +95,7 @@ export async function handleProxy(req, res, url, PORT) {
     res.on('close', () => body.destroy());
 
     if (isTs && deint) {
-      return proxyViaFfmpeg(body, res);
+      return proxyViaFfmpeg(body, res, url.searchParams.get('quality') === '720p');
     }
 
     res.writeHead(200, {
@@ -125,5 +125,5 @@ export async function handleProxyTranscode(res, url) {
     return send(res, 400, 'text/plain; charset=utf-8', 'Unsupported protocol');
   }
 
-  transcodeFromUrl(targetUrl.toString(), res);
+  transcodeFromUrl(targetUrl.toString(), res, url.searchParams.get('quality') === '720p');
 }
