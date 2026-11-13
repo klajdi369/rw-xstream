@@ -659,6 +659,16 @@ export default function App() {
       // stays idle, preventing a guide move from also tuning the background.
       if (epgGuideOpen) return;
 
+      if ((e.key === '-' || e.key === '+') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const video = videoRef.current;
+        if (!video) return;
+        e.preventDefault();
+        const step = e.key === '+' ? 5 : -5;
+        video.volume = clamp(Math.round(video.volume * 100) + step, 0, 100) / 100;
+        showToast(`Volume ${Math.round(video.volume * 100)}%`);
+        return;
+      }
+
       // Green / Guide opens the full schedule from either the player or list.
       if (isGuideToggle(e)) {
         e.preventDefault();

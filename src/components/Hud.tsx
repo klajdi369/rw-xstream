@@ -39,6 +39,7 @@ export function Hud({ title, subtitle, hidden, onOpenSettings, onOpenGuide, keyI
         <kbd>OK</kbd> channel list<br />
         <kbd>&#x2191;</kbd> <kbd>&#x2193;</kbd> prev / next<br />
         <kbd>CH+</kbd> <kbd>CH&#x2212;</kbd> jump 8<br />
+        <kbd>-</kbd> <kbd>+</kbd> keyboard volume<br />
         <kbd>0</kbd>&ndash;<kbd>9</kbd> go to number<br />
         <kbd>Blue</kbd> / <kbd>Pause</kbd> set order<br />
         <kbd>Green</kbd> / <kbd>Guide</kbd> TV guide<br />
