@@ -46,6 +46,7 @@ body { font-family: var(--font); color: var(--text); -webkit-font-smoothing: ant
   font: 15px/1.5 ui-monospace, monospace;
 }
 .playbackDebugReport textarea:focus { outline: 2px solid var(--foc); outline-offset: 2px; }
+.playbackDebugReport .btn:focus { outline: 2px solid var(--foc); outline-offset: 2px; }
 .bufferSpin {
   width: 56px; height: 56px;
   border: 3px solid rgba(255, 255, 255, .08);

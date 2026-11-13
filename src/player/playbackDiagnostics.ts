@@ -12,7 +12,7 @@ export function readPlaybackEnvironment() {
   const browser = navigator.userAgent.replace(/https?:\/\/\S+/gi, '[URL]').replace(/[\r\n\t]/g, ' ').slice(0, 250);
   return [
     `Browser · ${browser}`,
-    `Page · ${window.location.protocol === 'https:' ? 'HTTPS' : 'HTTP'} · ${navigator.onLine ? 'online' : 'offline'} · ${window.innerWidth} × ${window.innerHeight}`,
+    `Page · ${window.location.protocol === 'https:' ? 'HTTPS' : 'HTTP'} · ${window.isSecureContext ? 'secure context' : 'insecure context'} · ${navigator.onLine ? 'online' : 'offline'} · ${window.innerWidth} × ${window.innerHeight}`,
     `Media Source · ${window.MediaSource ? 'available' : 'unavailable'} · Managed Media Source ${managedMediaSource ? 'available' : 'unavailable'}`,
     `Media Source codecs · H.264/AAC ${supported(AVC_AAC)} · HEVC ${supported(HEVC)}`,
     `Native playback · HLS ${video.canPlayType('application/vnd.apple.mpegurl') || 'no'} · MPEG-TS ${video.canPlayType('video/mp2t') || 'no'}`,

@@ -27,7 +27,11 @@ export function PlaybackDebugReport({ entries, environment, onBack }: {
 }) {
   const textRef = React.useRef<HTMLTextAreaElement>(null);
   const [message, setMessage] = React.useState('');
-  const report = ['Playback diagnostics', ...environment, '', 'Event timeline',
+  const [deviceResults, setDeviceResults] = React.useState<string[]>([]);
+  const [testing, setTesting] = React.useState(false);
+  const report = ['Playback diagnostics', ...environment, '', 'On-device media test',
+    ...(deviceResults.length ? deviceResults : [testing ? 'Running…' : 'Select Run device test to measure this browser.']),
+    '', 'Event timeline',
     ...(entries.length ? entries.map(formatDiagnosticEntry) : ['Connect or tune to a channel to capture events.']),
   ].join('\n');
 
@@ -37,6 +41,22 @@ export function PlaybackDebugReport({ entries, environment, onBack }: {
     field.focus({ preventScroll: true });
     field.scrollTop = field.scrollHeight;
   }, []);
+
+  const testDevice = async () => {
+    setTesting(true);
+    setDeviceResults([]);
+    setMessage('Testing this browser…');
+    try {
+      const { runDeviceMediaTest } = await import('../player/deviceMediaTest');
+      setDeviceResults(await runDeviceMediaTest());
+      setMessage('Device test complete.');
+      if (textRef.current) textRef.current.scrollTop = 0;
+    } catch {
+      setMessage('Device test could not run.');
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const copy = async () => {
     try {
@@ -71,6 +91,7 @@ export function PlaybackDebugReport({ entries, environment, onBack }: {
         onBack();
         break;
       case 'ArrowUp': case 'ArrowDown': case 'PageUp': case 'PageDown': {
+        if (event.target !== field) break;
         event.preventDefault();
         const distance = event.key.startsWith('Page') ? field.clientHeight : 56;
         field.scrollTop += event.key.endsWith('Up') ? -distance : distance;
@@ -82,16 +103,28 @@ export function PlaybackDebugReport({ entries, environment, onBack }: {
           void copy();
         }
         break;
+      case 'ArrowLeft': case 'ArrowRight': {
+        const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('textarea, button:not(:disabled)'));
+        const current = controls.indexOf(event.target as HTMLElement);
+        if (current < 0) break;
+        event.preventDefault();
+        const step = event.key === 'ArrowRight' ? 1 : -1;
+        controls[(current + step + controls.length) % controls.length].focus();
+        break;
+      }
     }
   };
 
   return (
     <div className="playbackDebugReport" onKeyDown={onKeyDown}>
       <h2>Playback debug report</h2>
-      <p className="sub">↑ / ↓ scroll · OK to copy · Back to settings.</p>
+      <p className="sub">↑ / ↓ scroll · ← / → choose control · OK to select · Back to settings.</p>
       <textarea ref={textRef} aria-label="Debug report text" value={report} readOnly rows={18} />
       <div className="settActions">
-        <button type="button" className="btn btnP" onClick={copy}>Copy report</button>
+        <button type="button" className="btn btnP" aria-disabled={testing} onClick={() => { if (!testing) void testDevice(); }}>
+          {testing ? 'Running device test…' : 'Run device test'}
+        </button>
+        <button type="button" className="btn" onClick={copy}>Copy report</button>
         <button type="button" className="btn" onClick={onBack}>Back to settings</button>
         <span className="msg ok" role="status">{message}</span>
       </div>

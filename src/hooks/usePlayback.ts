@@ -582,7 +582,9 @@ export function usePlayback({
         // every few seconds. So start — and resume after a stall — only once
         // a few seconds are buffered. With a backlog that's immediate.
         const CUSHION_S = 3;
-        const STARTUP_BUFFER_WAIT_MS = 3500;
+        // A transcoder usually delivers at live speed, without the initial burst
+        // that lets a direct stream fill the cushion quickly.
+        const STARTUP_BUFFER_WAIT_MS = viaServer ? 8000 : 3500;
         const REBUFFER_WAIT_MS = 6000;
         const bufferedAhead = () => {
           const t = v.currentTime;
@@ -613,12 +615,16 @@ export function usePlayback({
             if (ahead < CUSHION_S && Date.now() - startedAt < maxWaitMs) return;
             clearHold();
             if (afterStall) setBuffering(false);
-            if (debugPlayback && !afterStall) reportAttempt(`Calling play() with ${ahead.toFixed(1)}s buffered.`);
+            if (debugPlayback) reportAttempt(afterStall
+              ? `Resuming after ${Math.round((Date.now() - startedAt) / 100) / 10}s of buffering with ${ahead.toFixed(1)}s ready.`
+              : `Calling play() with ${ahead.toFixed(1)}s buffered.`);
             startPlaying();
           }, 200);
         };
         const onWaiting = () => {
-          if (playing && !v.paused && bufferedAhead() < 0.5) hold(true);
+          if (!playing || v.paused || bufferedAhead() >= 0.5) return;
+          if (debugPlayback) reportAttempt(`Rebuffering (${describeMediaState(v)}).`, 'error');
+          hold(true);
         };
         v.addEventListener('waiting', onWaiting);
 
